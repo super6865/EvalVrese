@@ -1,0 +1,49 @@
+# Web Framework
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+python-multipart==0.0.6
+
+# Database
+sqlalchemy==2.0.25
+alembic==1.13.1
+pymysql==1.1.0
+cryptography==42.0.2
+
+# Task Queue
+celery==5.3.6
+redis==5.0.1
+nest-asyncio==1.6.0
+
+# LLM Framework
+pyautogen==0.2.12
+openai==1.12.0
+
+# Code Execution
+RestrictedPython>=7.0
+
+# Schema Validation
+jsonschema>=4.20.0
+
+# Observability
+opentelemetry-api==1.22.0
+opentelemetry-sdk==1.22.0
+opentelemetry-exporter-otlp==1.22.0
+opentelemetry-instrumentation-fastapi==0.43b0
+
+# Utilities
+pydantic==2.5.3
+pydantic-settings==2.1.0
+python-dotenv==1.0.0
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+
+# Data Processing
+pandas==2.2.0
+openpyxl==3.1.2
+chardet==5.2.0
+
+# Testing
+pytest==7.4.4
+pytest-asyncio==0.23.3
+httpx==0.26.0
+

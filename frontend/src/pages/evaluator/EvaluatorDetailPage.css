@@ -1,0 +1,19 @@
+/* 确保 Tabs 内容区域可以滚动 */
+.evaluator-detail-tabs {
+  display: flex !important;
+  flex-direction: column !important;
+  flex: 1 !important;
+  overflow: hidden !important;
+  min-height: 0 !important;
+}
+
+.evaluator-detail-tabs .ant-tabs-content-holder {
+  flex: 1 !important;
+  overflow: hidden !important;
+  min-height: 0 !important;
+}
+
+.evaluator-detail-tabs .ant-tabs-content {
+  height: 100% !important;
+}
+

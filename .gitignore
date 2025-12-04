@@ -99,3 +99,8 @@ celerybeat.pid
 *.temp
 .cache/
 
+# Git account switching tools (local configuration)
+switch_github_account.sh
+check_github_account.sh
+GIT_ACCOUNT_SWITCH_GUIDE.md
+QUICK_SWITCH.md

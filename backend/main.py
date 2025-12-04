@@ -12,6 +12,7 @@ app = FastAPI(
     version="1.0.0",
     docs_url="/api/docs",
     redoc_url="/api/redoc",
+    redirect_slashes=False,  # 禁用自动重定向尾斜杠，避免 307 重定向导致 SSL 错误
 )
 
 # CORS middleware

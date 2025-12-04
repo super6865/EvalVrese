@@ -92,7 +92,7 @@ class BatchDebugRequest(BaseModel):
 
 
 # Evaluator CRUD
-@router.get("/")
+@router.get("")
 async def list_evaluators(skip: int = 0, limit: int = 100, name: Optional[str] = None, db: Session = Depends(get_db)):
     """List all evaluators with optional name filter"""
     service = EvaluatorService(db)
@@ -100,7 +100,7 @@ async def list_evaluators(skip: int = 0, limit: int = 100, name: Optional[str] =
     return {"evaluators": evaluators, "total": total}
 
 
-@router.post("/")
+@router.post("")
 async def create_evaluator(data: EvaluatorCreate, db: Session = Depends(get_db)):
     """Create a new evaluator (with optional version in one step)"""
     service = EvaluatorService(db)

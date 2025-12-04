@@ -83,7 +83,7 @@ class CompareExperimentsRequest(BaseModel):
 
 
 # Experiment CRUD
-@router.get("/")
+@router.get("")
 async def list_experiments(skip: int = 0, limit: int = 100, name: Optional[str] = None, db: Session = Depends(get_db)):
     """List all experiments with optional name filter"""
     service = ExperimentService(db)
@@ -143,7 +143,7 @@ async def list_experiments_with_logs(
     return {"experiments": experiments_list, "total": total}
 
 
-@router.post("/")
+@router.post("")
 async def create_experiment(data: ExperimentCreate, db: Session = Depends(get_db)):
     """Create a new experiment"""
     # Validate evaluator_version_ids

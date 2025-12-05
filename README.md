@@ -71,6 +71,23 @@
 
 ---
 
+## 📝 Changelog
+
+### v1.0.0 (Current)
+
+**Initial Release** - Complete evaluation platform with core features:
+
+- ✅ **Dataset Management**: Import and version datasets in CSV, JSON, Excel formats
+- ✅ **Evaluator System**: Code-based and prompt-based evaluators with dynamic execution
+- ✅ **Experiment Management**: Batch evaluation with concurrency control and progress tracking
+- ✅ **Model Configuration**: Secure API key management and model parameter configuration
+- ✅ **Model Set Management**: Batch model evaluation with model set configuration
+- ✅ **Observability**: Distributed tracing with OpenTelemetry integration
+- ✅ **Result Analysis**: Experiment comparison and statistical aggregation
+- ✅ **Evaluator Records**: Execution history and detailed evaluation logs
+
+---
+
 ## 📁 Project Structure
 
 ```
@@ -240,6 +257,23 @@ After starting the backend service, access the API documentation:
 
 ---
 
+## 📖 User Guide
+
+For detailed usage instructions and step-by-step tutorials, please refer to:
+
+- **English**: [User Guide](docs/USAGE.md)
+- **中文**: [使用指南](docs/USAGE_zh.md)
+
+The user guide covers:
+- Dataset management and data import
+- Creating and managing evaluators
+- Running experiments and viewing results
+- Model configuration and model sets
+- Observability and trace analysis
+- Best practices and troubleshooting
+
+---
+
 ## 💻 Development
 
 ### Backend Development
@@ -329,6 +363,7 @@ This project is licensed under the [MIT License](LICENSE).
 ## 🙏 Acknowledgments
 
 - [AutoGen](https://github.com/microsoft/autogen) - Microsoft's AutoGen framework
+- [Coze Loop](https://github.com/coze-dev/cozeloop) - AI Agent development and operations platform
 - [FastAPI](https://fastapi.tiangolo.com/) - Modern, fast web framework
 - [React](https://react.dev/) - UI library
 - [Ant Design](https://ant.design/) - Enterprise-class UI component library

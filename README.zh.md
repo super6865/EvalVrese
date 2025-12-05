@@ -71,6 +71,23 @@
 
 ---
 
+## 📝 更新日志
+
+### v1.0.0 (当前版本)
+
+**初始版本** - 完整的评估平台，包含核心功能：
+
+- ✅ **数据集管理**：支持 CSV、JSON、Excel 格式的数据集导入和版本管理
+- ✅ **评估器系统**：代码评估器和提示评估器，支持动态执行
+- ✅ **实验管理**：批量评估，支持并发控制和进度追踪
+- ✅ **模型配置**：安全的 API 密钥管理和模型参数配置
+- ✅ **模型集管理**：支持批量模型评估的模型集配置
+- ✅ **可观测性**：基于 OpenTelemetry 的分布式追踪
+- ✅ **结果分析**：实验对比和统计聚合
+- ✅ **评估器记录**：执行历史和详细的评估日志
+
+---
+
 ## 📁 项目结构
 
 ```
@@ -240,6 +257,23 @@ npm run dev
 
 ---
 
+## 📖 使用指南
+
+详细的使用说明和分步教程，请参考：
+
+- **English**: [User Guide](docs/USAGE.md)
+- **中文**: [使用指南](docs/USAGE_zh.md)
+
+使用指南包含：
+- 数据集管理和数据导入
+- 创建和管理评估器
+- 运行实验和查看结果
+- 模型配置和模型集
+- 可观测性和链路分析
+- 最佳实践和故障排除
+
+---
+
 ## 💻 开发指南
 
 ### 后端开发
@@ -329,6 +363,7 @@ npm run lint   # 代码检查
 ## 🙏 致谢
 
 - [AutoGen](https://github.com/microsoft/autogen) - Microsoft 的 AutoGen 框架
+- [Coze Loop](https://github.com/coze-dev/cozeloop) - AI 智能体开发与运维平台
 - [FastAPI](https://fastapi.tiangolo.com/) - 现代、快速的 Web 框架
 - [React](https://react.dev/) - UI 库
 - [Ant Design](https://ant.design/) - 企业级 UI 组件库

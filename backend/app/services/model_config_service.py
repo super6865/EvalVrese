@@ -5,6 +5,7 @@ from typing import Dict, List, Optional, Any
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from app.models.model_config import ModelConfig
+from app.utils.crypto import encrypt_api_key, decrypt_api_key, mask_api_key
 import logging
 
 logger = logging.getLogger(__name__)
@@ -58,7 +59,8 @@ class ModelConfigService:
             }
             
             if include_sensitive:
-                config_dict['api_key'] = config.api_key
+                # Return masked API key instead of plain text for security
+                config_dict['api_key'] = mask_api_key(config.api_key)
             
             result.append(config_dict)
         
@@ -96,7 +98,8 @@ class ModelConfigService:
         }
         
         if include_sensitive:
-            config_dict['api_key'] = config.api_key
+            # Return masked API key instead of plain text for security
+            config_dict['api_key'] = mask_api_key(config.api_key)
         
         return config_dict
     
@@ -131,11 +134,14 @@ class ModelConfigService:
             }
         
         try:
+            # Encrypt API key before storing
+            encrypted_api_key = encrypt_api_key(config_data['api_key'])
+            
             config = ModelConfig(
                 config_name=config_data['config_name'],
                 model_type=config_data['model_type'],
                 model_version=config_data['model_version'],
-                api_key=config_data['api_key'],
+                api_key=encrypted_api_key,
                 api_base=config_data.get('api_base'),
                 temperature=config_data.get('temperature'),
                 max_tokens=config_data.get('max_tokens'),
@@ -218,8 +224,9 @@ class ModelConfigService:
                 config.model_type = config_data['model_type']
             if 'model_version' in config_data:
                 config.model_version = config_data['model_version']
-            if 'api_key' in config_data:
-                config.api_key = config_data['api_key']
+            if 'api_key' in config_data and config_data['api_key']:
+                # Encrypt API key before storing
+                config.api_key = encrypt_api_key(config_data['api_key'])
             if 'api_base' in config_data:
                 config.api_base = config_data.get('api_base')
             if 'temperature' in config_data:
@@ -349,10 +356,13 @@ class ModelConfigService:
         if not config:
             return None
         
+        # Decrypt API key for internal use
+        decrypted_api_key = decrypt_api_key(config.api_key)
+        
         # Build autogen config based on model type
         autogen_config = {
             "model": config.model_version,
-            "api_key": config.api_key,
+            "api_key": decrypted_api_key,
             "base_url": config.api_base,
         }
         

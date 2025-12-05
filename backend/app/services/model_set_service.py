@@ -5,6 +5,7 @@ from typing import Dict, List, Optional, Any
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from app.models.model_set import ModelSet
+from app.utils.crypto import encrypt_api_key, decrypt_api_key, mask_api_key
 import logging
 import json
 import httpx
@@ -97,11 +98,16 @@ class ModelSetService:
             }
         
         try:
+            # Encrypt API key in config if present
+            config = model_set_data['config'].copy() if model_set_data.get('config') else {}
+            if model_set_data['type'] == 'llm_model' and 'api_key' in config and config['api_key']:
+                config['api_key'] = encrypt_api_key(config['api_key'])
+            
             model_set = ModelSet(
                 name=model_set_data['name'],
                 description=model_set_data.get('description'),
                 type=model_set_data['type'],
-                config=model_set_data['config'],
+                config=config,
                 created_by=model_set_data.get('created_by'),
             )
             
@@ -180,7 +186,17 @@ class ModelSetService:
             if 'type' in model_set_data:
                 model_set.type = model_set_data['type']
             if 'config' in model_set_data:
-                model_set.config = model_set_data['config']
+                # Encrypt API key in config if present
+                config = model_set_data['config'].copy()
+                if model_set_data.get('type', model_set.type) == 'llm_model':
+                    # If api_key is provided and not empty, encrypt it
+                    # Otherwise, preserve the existing encrypted value
+                    if 'api_key' in config and config['api_key']:
+                        config['api_key'] = encrypt_api_key(config['api_key'])
+                    elif 'api_key' not in config and model_set.config and 'api_key' in model_set.config:
+                        # Preserve existing encrypted API key if not provided
+                        config['api_key'] = model_set.config['api_key']
+                model_set.config = config
             if 'created_by' in model_set_data:
                 model_set.created_by = model_set_data.get('created_by')
             
@@ -375,13 +391,16 @@ class ModelSetService:
             Debug result
         """
         model_version = config.get('model_version')
-        api_key = config.get('api_key')
+        encrypted_api_key = config.get('api_key')
         
-        if not model_version or not api_key:
+        if not model_version or not encrypted_api_key:
             return {
                 'success': False,
                 'message': 'Model version and API key are required'
             }
+        
+        # Decrypt API key for internal use
+        api_key = decrypt_api_key(encrypted_api_key)
         
         # Prepare prompt text from test_data
         prompt_text = None
@@ -555,12 +574,17 @@ class ModelSetService:
         Returns:
             Dictionary representation
         """
+        # Mask API key in config for security
+        config = model_set.config.copy() if model_set.config else {}
+        if model_set.type == 'llm_model' and 'api_key' in config:
+            config['api_key'] = mask_api_key(config['api_key'])
+        
         return {
             'id': model_set.id,
             'name': model_set.name,
             'description': model_set.description,
             'type': model_set.type,
-            'config': model_set.config,
+            'config': config,
             'created_at': model_set.created_at.isoformat() if model_set.created_at else None,
             'updated_at': model_set.updated_at.isoformat() if model_set.updated_at else None,
             'created_by': model_set.created_by,

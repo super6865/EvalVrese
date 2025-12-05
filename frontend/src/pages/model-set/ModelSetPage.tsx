@@ -67,11 +67,17 @@ export default function ModelSetPage() {
   }
 
   const handleEdit = (modelSet: ModelSet) => {
+    // Don't include api_key when editing for security
+    const configWithoutApiKey = { ...modelSet.config }
+    if (configWithoutApiKey.api_key) {
+      delete configWithoutApiKey.api_key
+    }
+    
     form.setFieldsValue({
       name: modelSet.name,
       description: modelSet.description,
       type: modelSet.type,
-      ...modelSet.config,
+      ...configWithoutApiKey,
     })
     openModal(modelSet)
   }
@@ -159,11 +165,14 @@ export default function ModelSetPage() {
         config = {
           model_type: values.model_type,
           model_version: values.model_version,
-          api_key: values.api_key,
           api_base: values.api_base || undefined,
           temperature: values.temperature !== undefined && values.temperature !== null ? Number(values.temperature) : undefined,
           max_tokens: values.max_tokens !== undefined && values.max_tokens !== null ? Number(values.max_tokens) : undefined,
           timeout: values.timeout ? Number(values.timeout) : 60,
+        }
+        // Only include api_key if it's provided (for updates, if empty, keep existing value)
+        if (values.api_key && values.api_key.trim()) {
+          config.api_key = values.api_key
         }
         // Remove undefined values
         Object.keys(config).forEach(key => {
@@ -431,8 +440,9 @@ export default function ModelSetPage() {
         name: 'api_key',
         label: 'API Key',
         type: 'password',
-        placeholder: '请输入API Key',
-        required: true,
+        placeholder: editingModelSet ? '如需更新请重新输入，留空则保持原值' : '请输入API Key',
+        required: !editingModelSet,
+        rules: editingModelSet ? [] : [{ required: true, message: '请输入API Key' }],
         groupCondition: (f) => f.getFieldValue('type') === 'llm_model',
       },
       {
@@ -473,7 +483,7 @@ export default function ModelSetPage() {
     ]
 
     return [...baseFields, ...agentApiFields, ...llmModelFields]
-  }, [])
+  }, [editingModelSet])
 
   const renderDebugFields = () => {
     if (!debuggingModelSet) return null

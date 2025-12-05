@@ -1,7 +1,6 @@
 /**
  * File upload utilities - Based on coze-loop implementation
  */
-import * as XLSX from 'xlsx'
 import JSZip from 'jszip'
 
 /**
@@ -111,8 +110,12 @@ export const getFileType = (fileName?: string): 'csv' | 'jsonl' | 'xlsx' | 'xls'
 
 /**
  * Get XLSX headers from file (frontend only)
+ * Uses dynamic import to load xlsx library only when needed
  */
 export const getXlsxHeaders = async (file: File): Promise<string[]> => {
+  // 动态导入 xlsx 库，只在需要时加载
+  const XLSX = await import('xlsx');
+  
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     

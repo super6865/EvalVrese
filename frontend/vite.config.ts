@@ -4,6 +4,52 @@ import react from '@vitejs/plugin-react'
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [react()],
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: (id) => {
+          // 将 node_modules 中的大型依赖库分离到独立的 chunk
+          if (id.includes('node_modules')) {
+            // Ant Design 相关库
+            if (id.includes('antd')) {
+              return 'antd';
+            }
+            if (id.includes('@ant-design/icons')) {
+              return 'antd-icons';
+            }
+            // Monaco Editor (代码编辑器)
+            if (id.includes('monaco-editor') || id.includes('@monaco-editor')) {
+              return 'monaco-editor';
+            }
+            // Excel 处理库
+            if (id.includes('xlsx')) {
+              return 'xlsx';
+            }
+            // ZIP 处理库
+            if (id.includes('jszip')) {
+              return 'jszip';
+            }
+            // React 核心库
+            if (id.includes('react') || id.includes('react-dom') || id.includes('react-router')) {
+              return 'react-vendor';
+            }
+            // 其他第三方库
+            return 'vendor';
+          }
+        },
+      },
+    },
+    // 启用压缩
+    minify: 'terser',
+    terserOptions: {
+      compress: {
+        drop_console: false, // 保留 console，方便调试
+        drop_debugger: true,
+      },
+    },
+    // 设置 chunk 大小警告限制
+    chunkSizeWarningLimit: 1000,
+  },
   server: {
     host: '0.0.0.0', // 允许外部访问，frp 转发需要
     port: 5173,

@@ -279,6 +279,13 @@ class PromptEvaluatorService:
             if not model_config_dict:
                 raise ValueError(f"Model configuration {model_config_id} not found")
             
+            # Decrypt API key for internal use (get_config_by_id returns masked key)
+            from app.models.model_config import ModelConfig
+            from app.utils.crypto import decrypt_api_key
+            db_config = self.db.query(ModelConfig).filter(ModelConfig.id == model_config_id).first()
+            if db_config and db_config.api_key:
+                model_config_dict['api_key'] = decrypt_api_key(db_config.api_key)
+            
             # Use autogen framework
             return await self._run_with_autogen(
                 message_list=message_list,

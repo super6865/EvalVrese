@@ -15,6 +15,7 @@ from app.models.experiment import (
 from app.models.trace import Trace, Span
 from app.models.model_config import ModelConfig
 from app.models.model_set import ModelSet
+from app.models.prompt import Prompt, PromptVersion, PromptExecution
 
 __all__ = [
     "Dataset",
@@ -37,5 +38,8 @@ __all__ = [
     "Span",
     "ModelConfig",
     "ModelSet",
+    "Prompt",
+    "PromptVersion",
+    "PromptExecution",
 ]
 

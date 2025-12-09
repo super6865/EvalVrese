@@ -478,6 +478,8 @@ class AutoGenTargetInvoker:
             raise ValueError("Prompt type target requires model_config_id and database session for LLM configuration")
         
         from app.services.model_config_service import ModelConfigService
+        from app.models.model_config import ModelConfig
+        from app.utils.crypto import decrypt_api_key
         model_config_service = ModelConfigService(self.db)
         model_config_dict = model_config_service.get_config_by_id(
             model_config_id,
@@ -486,6 +488,11 @@ class AutoGenTargetInvoker:
         
         if not model_config_dict:
             raise ValueError(f"Model configuration {model_config_id} not found")
+        
+        # Decrypt API key for internal use (get_config_by_id returns masked key)
+        db_config = self.db.query(ModelConfig).filter(ModelConfig.id == model_config_id).first()
+        if db_config and db_config.api_key:
+            model_config_dict['api_key'] = decrypt_api_key(db_config.api_key)
         
         prompt_template = self.config.get("prompt_template", "")
         autogen_config = create_autogen_config_from_model_config(model_config_dict)

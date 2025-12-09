@@ -4,7 +4,7 @@ FastAPI application entry point
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
-from app.api.v1 import dataset, evaluator, evaluator_record, experiment, observability, model_config, model_set
+from app.api.v1 import dataset, evaluator, evaluator_record, experiment, observability, model_config, model_set, prompt
 
 app = FastAPI(
     title="EvalVerse API",
@@ -32,6 +32,7 @@ app.include_router(experiment.router, prefix="/api/v1/experiments", tags=["exper
 app.include_router(observability.router, prefix="/api/v1/observability", tags=["observability"])
 app.include_router(model_config.router, prefix="/api/v1/model-configs", tags=["model-configs"])
 app.include_router(model_set.router, prefix="/api/v1/model-sets", tags=["model-sets"])
+app.include_router(prompt.router, prefix="/api/v1/prompts", tags=["prompts"])
 
 
 @app.get("/")

@@ -4,8 +4,10 @@ import { useLocation, Link } from 'react-router-dom'
 import { datasetService } from '../../services/datasetService'
 import { evaluatorService } from '../../services/evaluatorService'
 import { experimentService } from '../../services/experimentService'
+import { promptService } from '../../services/promptService'
 
 const breadcrumbNameMap: Record<string, string> = {
+  '/prompt-management': 'Prompt 管理',
   '/datasets': '数据集',
   '/datasets/create': '创建数据集',
   '/evaluators': '评估器',
@@ -34,7 +36,7 @@ export function Breadcrumb() {
 
   // 检测详情页路径并加载名称
   useEffect(() => {
-    const loadDetailName = async (path: string, type: 'dataset' | 'evaluator' | 'experiment', id: string) => {
+    const loadDetailName = async (path: string, type: 'dataset' | 'evaluator' | 'experiment' | 'prompt', id: string) => {
       // 如果正在加载或已加载，跳过
       if (loadingPathsRef.current.has(path) || detailNamesRef.current[path]) {
         return
@@ -63,6 +65,10 @@ export function Breadcrumb() {
           case 'experiment':
             const experiment = await experimentService.get(numericId)
             name = experiment.name
+            break
+          case 'prompt':
+            const prompt = await promptService.get(numericId)
+            name = prompt.prompt_basic.display_name
             break
           default:
             loadingPathsRef.current.delete(path)
@@ -99,6 +105,8 @@ export function Breadcrumb() {
         loadDetailName(path, 'evaluator', id)
       } else if (type === 'experiments' && id) {
         loadDetailName(path, 'experiment', id)
+      } else if (type === 'prompt-management' && id) {
+        loadDetailName(path, 'prompt', id)
       }
     }
   }, [location.pathname])

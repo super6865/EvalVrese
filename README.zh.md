@@ -1,4 +1,4 @@
-# EvalVerse
+# EvalVerse (持续更新中)
 
 ![TypeScript](https://img.shields.io/badge/TypeScript-007ACC?logo=TypeScript&logoColor=white)
 ![Python](https://img.shields.io/badge/Python-3.8+-3776AB?logo=Python&logoColor=white)
@@ -26,6 +26,7 @@
 - **评估器系统**：代码评估器和提示评估器，支持动态执行
 - **实验管理**：批量评估，支持并发控制和进度追踪
 - **模型配置**：安全的 API 密钥管理和模型参数配置
+- **Prompt 管理**：模板库、版本控制、草稿管理和调试功能
 - **可观测性**：基于 OpenTelemetry 的分布式追踪
 - **结果分析**：实验对比和统计聚合
 
@@ -53,6 +54,9 @@
 | **实验对比** | 对比不同模型配置下的实验结果 |
 | **自定义评估器开发** | 使用代码评估器创建和测试自定义评估逻辑 |
 | **批量处理** | 使用并发控制和进度追踪运行大规模评估 |
+| **Prompt 模板开发** | 创建和管理可复用的 Prompt 模板，支持变量占位符 |
+| **Prompt 版本管理** | 追踪 Prompt 变更，支持版本控制和回滚功能 |
+| **Prompt 调试** | 实时测试和调试 Prompt，直接与 LLM 交互 |
 | **可观测性分析** | 使用 OpenTelemetry 追踪和分析评估执行路径 |
 | **模型性能追踪** | 通过版本化实验追踪模型性能随时间的变化 |
 
@@ -62,8 +66,6 @@
 
 | | 功能点 | 描述 |
 |---|---|------|
-| <span style="font-size: 2em">☐</span> | **Prompt 模板库** | 创建可复用的 Prompt 模板，支持变量占位符和动态参数 |
-| <span style="font-size: 2em">☐</span> | **Prompt 版本控制** | 类似 Git 的版本 diff 对比和回滚机制 |
 | <span style="font-size: 2em">☐</span> | **Prompt A/B 测试** | 多版本 Prompt 对比实验，自动化效果分析 |
 | <span style="font-size: 2em">☐</span> | **智能数据生成** | 基于 Prompt 模板自动生成测试数据，支持多种场景类型（问答、对话、摘要、翻译等） |
 | <span style="font-size: 2em">☐</span> | **数据标注界面** | 人工标注工作台，支持批量标注和多标注者一致性分析 |
@@ -73,7 +75,17 @@
 
 ## 📝 更新日志
 
-### v1.0.0 (当前版本)
+### v1.1.0 (当前版本)
+
+**Prompt 工程能力** - 新增完整的 Prompt 管理系统：
+
+- ✅ **Prompt 管理**：完整的 Prompt 模板库，支持 CRUD 操作
+- ✅ **Prompt 版本控制**：版本控制系统，支持草稿管理和版本历史
+- ✅ **Prompt 调试**：实时 Prompt 测试和调试界面
+- ✅ **变量管理**：自动从 `{{variable}}` 占位符中提取变量
+- ✅ **模型集成**：与模型配置无缝集成，支持 Prompt 执行
+
+### v1.0.0
 
 **初始版本** - 完整的评估平台，包含核心功能：
 
@@ -100,6 +112,7 @@ evalverse/
 │   │   │   ├── experiment.py  # 实验 API
 │   │   │   ├── model_config.py # 模型配置 API
 │   │   │   ├── model_set.py   # 模型集 API
+│   │   │   ├── prompt.py      # Prompt 管理 API
 │   │   │   └── observability.py # 可观测性 API
 │   │   ├── core/              # 核心配置
 │   │   │   ├── config.py      # 应用配置
@@ -385,7 +398,3 @@ npm run lint   # 代码检查
 
 - GitHub Issues: [提交问题](https://github.com/super6865/EvalVrese/issues)
 - Email: 15979193012@163.com
-
----
-
-**Happy Evaluating! 🎉**

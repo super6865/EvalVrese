@@ -15,6 +15,9 @@ import {
   ControlOutlined,
   RadarChartOutlined,
   FileTextOutlined,
+  EditOutlined,
+  CodeOutlined,
+  ToolOutlined,
 } from '@ant-design/icons'
 import classNames from 'classnames'
 
@@ -31,6 +34,18 @@ interface MenuItem {
 }
 
 const menuItems: MenuItem[] = [
+  {
+    key: 'prompt-engineering',
+    label: 'Prompt 工程',
+    icon: <ToolOutlined />,
+    children: [
+      {
+        key: 'prompt-management',
+        label: 'Prompt 管理',
+        icon: <EditOutlined />,
+      },
+    ],
+  },
   {
     key: 'data-management',
     label: '数据管理',
@@ -109,7 +124,10 @@ export function Navbar() {
     const keys: string[] = []
     const open: string[] = []
     
-    if (path.startsWith('/datasets')) {
+    if (path.startsWith('/prompt-management')) {
+      keys.push('prompt-management')
+      open.push('prompt-engineering')
+    } else if (path.startsWith('/datasets')) {
       keys.push('datasets')
       open.push('data-management')
     } else if (path.startsWith('/model-sets')) {

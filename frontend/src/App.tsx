@@ -4,6 +4,8 @@ import { TemplateLayout } from './components/layout/TemplateLayout'
 import { Spin } from 'antd'
 
 // 懒加载所有页面组件
+const PromptManagementPage = lazy(() => import('./pages/prompt-management/PromptManagementPage'))
+const PromptDetailPage = lazy(() => import('./pages/prompt-management/PromptDetailPage'))
 const DatasetListPage = lazy(() => import('./pages/dataset/DatasetListPage'))
 const DatasetCreatePage = lazy(() => import('./pages/dataset/DatasetCreatePage'))
 const DatasetDetailPage = lazy(() => import('./pages/dataset/DatasetDetailPage'))
@@ -35,6 +37,9 @@ function App() {
       <Routes>
         <Route path="/" element={<TemplateLayout />}>
           <Route index element={<Navigate to="/datasets" replace />} />
+          {/* Prompt 工程路由 */}
+          <Route path="prompt-management" element={<PromptManagementPage />} />
+          <Route path="prompt-management/:id" element={<PromptDetailPage />} />
           {/* 数据集路由 */}
           <Route path="datasets" element={<DatasetListPage />} />
           <Route path="datasets/create" element={<DatasetCreatePage />} />

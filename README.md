@@ -1,4 +1,4 @@
-# EvalVerse
+# EvalVerse (Continuously Updating)
 
 ![TypeScript](https://img.shields.io/badge/TypeScript-007ACC?logo=TypeScript&logoColor=white)
 ![Python](https://img.shields.io/badge/Python-3.8+-3776AB?logo=Python&logoColor=white)
@@ -26,6 +26,7 @@
 - **Evaluator System**: Code-based and prompt-based evaluators with dynamic execution
 - **Experiment Management**: Batch evaluation with concurrency control and progress tracking
 - **Model Configuration**: Secure API key management and model parameter configuration
+- **Prompt Management**: Template library with version control, draft management, and debugging capabilities
 - **Observability**: Distributed tracing with OpenTelemetry integration
 - **Result Analysis**: Experiment comparison and statistical aggregation
 
@@ -53,6 +54,9 @@
 | **Experiment Comparison** | Compare experiment results across different model configurations |
 | **Custom Evaluator Development** | Create and test custom evaluation logic using code evaluators |
 | **Batch Processing** | Run large-scale evaluations with concurrency control and progress tracking |
+| **Prompt Template Development** | Create and manage reusable prompt templates with variable placeholders |
+| **Prompt Versioning** | Track prompt changes with version control and rollback capabilities |
+| **Prompt Debugging** | Test and debug prompts in real-time with direct LLM interaction |
 | **Observability Analysis** | Trace and analyze evaluation execution paths using OpenTelemetry |
 | **Model Performance Tracking** | Track model performance over time with versioned experiments |
 
@@ -62,8 +66,6 @@
 
 | | Feature | Description |
 |---|---|-------------|
-| <span style="font-size: 2em">☐</span> | **Prompt Template Library** | Create reusable prompt templates with variable placeholders |
-| <span style="font-size: 2em">☐</span> | **Prompt Version Control** | Git-like version diff comparison and rollback mechanism |
 | <span style="font-size: 2em">☐</span> | **Prompt A/B Testing** | Multi-version prompt comparison experiments with automated analysis |
 | <span style="font-size: 2em">☐</span> | **Intelligent Data Generation** | Auto-generate test data based on prompt templates, support multiple scenarios (QA, dialogue, summarization, translation) |
 | <span style="font-size: 2em">☐</span> | **Data Annotation Interface** | Human annotation workspace with batch annotation tools and multi-annotator consistency analysis |
@@ -73,7 +75,17 @@
 
 ## 📝 Changelog
 
-### v1.0.0 (Current)
+### v1.1.0 (Current)
+
+**Prompt Engineering Capabilities** - Added comprehensive prompt management system:
+
+- ✅ **Prompt Management**: Complete prompt template library with CRUD operations
+- ✅ **Prompt Versioning**: Version control system with draft management and version history
+- ✅ **Prompt Debugging**: Real-time prompt testing and debugging interface
+- ✅ **Variable Management**: Automatic variable extraction from `{{variable}}` placeholders
+- ✅ **Model Integration**: Seamless integration with model configurations for prompt execution
+
+### v1.0.0
 
 **Initial Release** - Complete evaluation platform with core features:
 
@@ -100,6 +112,7 @@ evalverse/
 │   │   │   ├── experiment.py  # Experiment API
 │   │   │   ├── model_config.py # Model Config API
 │   │   │   ├── model_set.py   # Model Set API
+│   │   │   ├── prompt.py      # Prompt Management API
 │   │   │   └── observability.py # Observability API
 │   │   ├── core/              # Core Configuration
 │   │   │   ├── config.py      # App Configuration
@@ -385,7 +398,3 @@ For questions or suggestions, please contact us through:
 
 - GitHub Issues: [Submit an Issue](https://github.com/super6865/EvalVrese/issues)
 - Email: 15979193012@163.com
-
----
-
-**Happy Evaluating! 🎉**

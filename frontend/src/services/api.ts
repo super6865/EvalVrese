@@ -44,7 +44,12 @@ api.interceptors.request.use(
       url: config.url,
       baseURL: config.baseURL,
       fullURL: `${config.baseURL}${config.url}`,
+      data: config.data, // Log request body
     })
+    // Special handling for debug endpoint to ensure model_config is not empty
+    if (config.url?.includes('/debug') && config.data) {
+      console.log('[API Request Debug] model_config:', config.data.model_config)
+    }
     return config
   },
   (error) => {

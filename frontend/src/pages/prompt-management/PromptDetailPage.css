@@ -1,0 +1,6 @@
+.prompt-detail-page {
+  height: 100%;
+  display: flex;
+  flexDirection: column;
+}
+

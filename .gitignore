@@ -104,3 +104,14 @@ switch_github_account.sh
 check_github_account.sh
 GIT_ACCOUNT_SWITCH_GUIDE.md
 QUICK_SWITCH.md
+
+
+# OpenSpec 临时文件
+.openspec/cache/
+openspec/
+
+
+# AI生成的临时内容
+*.ai-tmp.*
+.ai-backup/
+AGENTS.md

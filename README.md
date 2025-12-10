@@ -75,7 +75,17 @@
 
 ## 📝 Changelog
 
-### v1.1.0 (Current)
+### v1.1.1 (Current)
+
+**Experiment Prompt Evaluation** - Added prompt evaluation support in experiments:
+
+- ✅ **Prompt as Evaluation Target**: Support selecting prompts as evaluation targets in experiments
+- ✅ **User Input Mapping**: Mandatory user input field mapping to dataset fields
+- ✅ **Variable Mapping**: Optional prompt variable mapping to dataset fields
+- ✅ **Default Variable Values**: Use prompt-managed variable values when no mapping is configured
+- ✅ **Version Support**: Support selecting prompt versions or using draft for evaluation
+
+### v1.1.0
 
 **Prompt Engineering Capabilities** - Added comprehensive prompt management system:
 

@@ -7,6 +7,7 @@ from typing import List, Optional, Dict, Any, Tuple
 from app.models.prompt import Prompt, PromptVersion, PromptExecution
 from datetime import datetime
 import json
+import re
 
 
 class PromptService:
@@ -317,4 +318,72 @@ class PromptService:
         return self.db.query(PromptExecution).filter(
             PromptExecution.prompt_id == prompt_id
         ).order_by(desc(PromptExecution.created_at)).limit(limit).all()
+
+    # ========== Helper Methods ==========
+    
+    def extract_variables_from_prompt(self, prompt_id: int, version: Optional[str] = None) -> List[str]:
+        """
+        Extract variable names from prompt messages
+        
+        Args:
+            prompt_id: Prompt ID
+            version: Version string (None for draft)
+            
+        Returns:
+            List of variable names found in messages
+        """
+        prompt = self.get_prompt(prompt_id)
+        if not prompt:
+            raise ValueError("Prompt not found")
+        
+        # Load prompt content
+        prompt_content = None
+        if version and version != "draft":
+            version_obj = self.get_version(prompt_id, version)
+            if not version_obj:
+                raise ValueError(f"Version '{version}' not found")
+            prompt_content = version_obj.content
+        else:
+            prompt_content = prompt.draft_detail
+        
+        if not prompt_content:
+            return []
+        
+        # Remove metadata if exists
+        if isinstance(prompt_content, dict) and '_metadata' in prompt_content:
+            prompt_content = {k: v for k, v in prompt_content.items() if k != '_metadata'}
+        
+        # Extract variables from messages
+        messages = prompt_content.get("messages", [])
+        variables = set()
+        
+        # Regular expression to match {variable} or {{variable}}
+        pattern = r'\{\{?(\w+)\}?\}'
+        
+        for msg in messages:
+            content = msg.get("content", "")
+            if isinstance(content, dict):
+                content_text = content.get("text", "")
+            else:
+                content_text = str(content)
+            
+            # Find all variable placeholders
+            matches = re.findall(pattern, content_text)
+            variables.update(matches)
+        
+        # Also check if variables are explicitly defined
+        if isinstance(prompt_content, dict) and "variables" in prompt_content:
+            var_def = prompt_content["variables"]
+            if isinstance(var_def, dict):
+                # Dict format: {"var1": "value1", ...}
+                variables.update(var_def.keys())
+            elif isinstance(var_def, list):
+                # List format: [{"name": "var1", "value": "value1"}, ...]
+                for var_item in var_def:
+                    if isinstance(var_item, dict) and "name" in var_item:
+                        var_name = var_item.get("name")
+                        if var_name:  # Only add if var_name is not None or empty
+                            variables.add(var_name)
+        
+        return sorted(list(variables))
 

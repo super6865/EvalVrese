@@ -229,4 +229,22 @@ export const promptService = {
       throw new Error(errorMessage)
     }
   },
+
+  // Get prompt variables
+  getVariables: async (promptId: number, version?: string | null): Promise<string[]> => {
+    try {
+      const params: any = {}
+      if (version && version !== 'draft') {
+        params.version = version
+      }
+      const response = await api.get(`/prompts/${promptId}/variables`, { params })
+      if (response.data.success && response.data.data?.variables) {
+        return response.data.data.variables
+      }
+      return []
+    } catch (error: any) {
+      console.error('获取Prompt变量失败', error)
+      return []
+    }
+  },
 }

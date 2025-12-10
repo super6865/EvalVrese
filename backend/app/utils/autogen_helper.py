@@ -471,15 +471,78 @@ class AutoGenTargetInvoker:
     
     def _init_prompt_target(self):
         """Initialize prompt type target using AutoGen"""
-        # For prompt type, we need LLM config to call the model
-        # Try to get model_config_id from config
-        model_config_id = self.config.get("model_config_id")
-        if not model_config_id or not self.db:
-            raise ValueError("Prompt type target requires model_config_id and database session for LLM configuration")
+        if not self.db:
+            raise ValueError("Prompt type target requires database session")
         
+        # Get prompt_id and prompt_version from config
+        prompt_id = self.config.get("prompt_id")
+        if not prompt_id:
+            raise ValueError("prompt_id is required for prompt type target")
+        
+        prompt_version = self.config.get("prompt_version")  # Can be None for draft
+        
+        # Load prompt configuration from database
+        from app.services.prompt_service import PromptService
+        prompt_service = PromptService(self.db)
+        
+        prompt = prompt_service.get_prompt(prompt_id)
+        if not prompt:
+            raise ValueError(f"Prompt {prompt_id} not found")
+        
+        # Load prompt content (from version or draft)
+        prompt_content = None
+        if prompt_version and prompt_version != "draft":
+            # Load from version
+            version = prompt_service.get_version(prompt_id, prompt_version)
+            if not version:
+                raise ValueError(f"Prompt version '{prompt_version}' not found")
+            prompt_content = version.content
+        else:
+            # Load from draft
+            if not prompt.draft_detail:
+                raise ValueError(f"Prompt {prompt_id} has no draft or version")
+            prompt_content = prompt.draft_detail
+            # Remove metadata if exists
+            if isinstance(prompt_content, dict) and '_metadata' in prompt_content:
+                prompt_content = {k: v for k, v in prompt_content.items() if k != '_metadata'}
+        
+        if not prompt_content:
+            raise ValueError(f"Prompt {prompt_id} has no content")
+        
+        # Extract configuration from prompt content
+        self.prompt_messages = prompt_content.get("messages", [])
+        self.prompt_model_config = prompt_content.get("model_config", {})
+        self.prompt_tools = prompt_content.get("tools", [])
+        
+        # Convert variables to dict format if it's a list
+        # Frontend may store variables as: [{"name": "var1", "value": "value1"}, ...]
+        # Or as dict: {"var1": "value1", ...}
+        variables_raw = prompt_content.get("variables", {})
+        if isinstance(variables_raw, list):
+            # Convert list format to dict: [{"name": "var1", "value": "value1"}] -> {"var1": "value1"}
+            self.prompt_variables = {}
+            for var_item in variables_raw:
+                if isinstance(var_item, dict) and "name" in var_item:
+                    var_name = var_item.get("name")
+                    if var_name:  # Only add if var_name is not None or empty
+                        var_value = var_item.get("value", "")
+                        self.prompt_variables[var_name] = var_value
+        elif isinstance(variables_raw, dict):
+            # Already in dict format
+            self.prompt_variables = variables_raw
+        else:
+            self.prompt_variables = {}
+        
+        # Get model_config_id from prompt's model_config
+        model_config_id = self.prompt_model_config.get("model_config_id")
+        if not model_config_id:
+            raise ValueError("Prompt model_config must contain model_config_id")
+        
+        # Load model configuration
         from app.services.model_config_service import ModelConfigService
         from app.models.model_config import ModelConfig
         from app.utils.crypto import decrypt_api_key
+        
         model_config_service = ModelConfigService(self.db)
         model_config_dict = model_config_service.get_config_by_id(
             model_config_id,
@@ -489,21 +552,43 @@ class AutoGenTargetInvoker:
         if not model_config_dict:
             raise ValueError(f"Model configuration {model_config_id} not found")
         
-        # Decrypt API key for internal use (get_config_by_id returns masked key)
+        # Decrypt API key for internal use
         db_config = self.db.query(ModelConfig).filter(ModelConfig.id == model_config_id).first()
         if db_config and db_config.api_key:
             model_config_dict['api_key'] = decrypt_api_key(db_config.api_key)
         
-        prompt_template = self.config.get("prompt_template", "")
+        # Merge prompt model_config overrides (temperature, max_tokens, etc.)
+        if self.prompt_model_config.get("temperature") is not None:
+            model_config_dict['temperature'] = self.prompt_model_config["temperature"]
+        if self.prompt_model_config.get("max_tokens") is not None:
+            model_config_dict['max_tokens'] = self.prompt_model_config["max_tokens"]
+        
+        # Create autogen config
         autogen_config = create_autogen_config_from_model_config(model_config_dict)
         
+        # Extract system message from messages
+        system_message = "You are a helpful assistant."
+        for msg in self.prompt_messages:
+            if msg.get("role") == "system":
+                content = msg.get("content", "")
+                if isinstance(content, dict):
+                    system_message = content.get("text", system_message)
+                else:
+                    system_message = str(content)
+                break
+        
+        # Initialize agent
         self.agent = ConversableAgent(
             name="target",
-            system_message=prompt_template or "You are a helpful assistant.",
+            system_message=system_message,
             llm_config=autogen_config,
             human_input_mode="NEVER",
             max_consecutive_auto_reply=1,
         )
+        
+        # Store variable_mapping and user_input_mapping for later use
+        self.variable_mapping = self.config.get("variable_mapping", {})
+        self.user_input_mapping = self.config.get("user_input_mapping")  # Field key for user input
     
     def _init_api_target(self):
         """Initialize API type target - create a tool for API calling"""
@@ -639,16 +724,110 @@ class AutoGenTargetInvoker:
     
     async def _invoke_prompt(self, input_data: Dict[str, Any]) -> str:
         """Invoke prompt target using AutoGen agent"""
-        prompt_template = self.config.get("prompt_template", "")
-        variables = self.config.get("variables", {})
+        # Get user input value from input_data using user_input_mapping
+        # Add it to input_data as "user_input" for use in prompt templates
+        if self.user_input_mapping and self.user_input_mapping in input_data:
+            user_input_value = input_data[self.user_input_mapping]
+            if user_input_value is not None:
+                # Add user_input to input_data so it can be used in prompt templates
+                input_data["user_input"] = str(user_input_value)
         
-        # Replace variables in template
-        prompt = prompt_template
-        for key, value in variables.items():
-            prompt = prompt.replace(f"{{{key}}}", str(input_data.get(value, "")))
+        # Build messages from prompt configuration
+        messages = []
         
-        # Use LLM agent to generate response
-        return await self._invoke_llm({"prompt": prompt})
+        for msg_template in self.prompt_messages:
+            role = msg_template.get("role", "user")
+            content_template = msg_template.get("content", "")
+            
+            # Extract text content
+            if isinstance(content_template, dict):
+                content_text = content_template.get("text", "")
+            else:
+                content_text = str(content_template)
+            
+            # Replace variables in content
+            # Support both {variable} and {{variable}} formats
+            # First, replace prompt variables (from variable_mapping or prompt default values)
+            for var_name in self.prompt_variables.keys():
+                # Determine the value to use for this variable
+                value_str = None
+                
+                # Priority 1: Use variable_mapping if exists (map to dataset field)
+                if self.variable_mapping and var_name in self.variable_mapping:
+                    field_name = self.variable_mapping[var_name]
+                    if field_name and field_name in input_data:
+                        value = input_data[field_name]
+                        value_str = str(value) if value is not None else ""
+                
+                # Priority 2: Use prompt's default variable value (from prompt management)
+                if value_str is None:
+                    var_value = self.prompt_variables.get(var_name)
+                    if var_value is not None:
+                        value_str = str(var_value)
+                
+                # Replace placeholders if we have a value
+                if value_str is not None:
+                    placeholder_single = "{" + var_name + "}"
+                    placeholder_double = "{{" + var_name + "}}"
+                    content_text = content_text.replace(placeholder_double, value_str)
+                    content_text = content_text.replace(placeholder_single, value_str)
+            
+            # Replace user_input placeholder if exists (common patterns)
+            if "user_input" in input_data:
+                user_input_value = input_data["user_input"]
+                user_input_placeholders = [
+                    '{user_input}', '{{user_input}}', 
+                    '{input}', '{{input}}', 
+                    '{query}', '{{query}}',
+                    '{user_query}', '{{user_query}}'
+                ]
+                for placeholder in user_input_placeholders:
+                    if placeholder in content_text:
+                        content_text = content_text.replace(placeholder, user_input_value)
+                        break
+                
+                # If user message is empty or only whitespace after variable replacement,
+                # use user_input as the message content
+                if role == "user" and not content_text.strip():
+                    content_text = user_input_value
+            
+            messages.append({"role": role, "content": content_text})
+        
+        # Clear chat history before generating reply
+        if self.agent:
+            _clear_agent_chat_messages(self.agent)
+        
+        # Generate reply using AutoGen agent
+        import asyncio
+        loop = asyncio.get_event_loop()
+        
+        try:
+            response = await loop.run_in_executor(
+                None,
+                lambda: self.agent.generate_reply(messages=messages)
+            )
+        except Exception as e:
+            error_msg = str(e)
+            error_type = type(e).__name__
+            
+            if "connection" in error_msg.lower() or "connect" in error_msg.lower():
+                raise ValueError(f"Connection error: Failed to connect to LLM service: {error_msg} (type: {error_type})")
+            elif "timeout" in error_msg.lower():
+                raise ValueError(f"Timeout error: LLM request timed out: {error_msg} (type: {error_type})")
+            elif "api" in error_msg.lower() and "key" in error_msg.lower():
+                raise ValueError(f"Authentication error: Invalid API key or authentication failed: {error_msg} (type: {error_type})")
+            else:
+                raise ValueError(f"LLM invocation error: {error_msg} (type: {error_type})")
+        
+        # Extract content from response
+        if isinstance(response, dict):
+            content = response.get("content", "")
+        elif hasattr(response, "content"):
+            content = response.content
+        else:
+            content = str(response)
+        
+        return content
     
     async def _invoke_api(self, input_data: Dict[str, Any]) -> str:
         """Invoke direct API call"""

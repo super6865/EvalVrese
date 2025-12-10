@@ -1,15 +1,155 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Form, Input, Button, Card, message, Space, Select, Steps, Spin } from 'antd'
+import { Form, Input, Button, Card, message, Space, Select, Steps, Spin, Table, Tag } from 'antd'
 import type { FormInstance } from 'antd/es/form'
 import { ArrowLeftOutlined } from '@ant-design/icons'
 import { datasetService } from '../../services/datasetService'
 import { evaluatorService } from '../../services/evaluatorService'
 import { experimentService } from '../../services/experimentService'
 import { modelSetService } from '../../services/modelSetService'
+import { promptService } from '../../services/promptService'
 
 const { TextArea } = Input
 const { Option } = Select
+
+// Variable Mapping Editor Component
+interface VariableMappingEditorProps {
+  variables: string[]
+  datasetFields: any[]
+  value: Record<string, string>
+  onChange: (mapping: Record<string, string>) => void
+  userInputValue?: string
+  onUserInputChange?: (fieldKey: string) => void
+}
+
+function VariableMappingEditor({ 
+  variables, 
+  datasetFields, 
+  value, 
+  onChange,
+  userInputValue,
+  onUserInputChange
+}: VariableMappingEditorProps) {
+  const handleMappingChange = (variable: string, fieldKey: string) => {
+    const newMapping = { ...(value || {}) }
+    if (fieldKey) {
+      newMapping[variable] = fieldKey
+    } else {
+      delete newMapping[variable]
+    }
+    onChange(newMapping)
+  }
+
+  // Ensure datasetFields is an array
+  const safeDatasetFields = Array.isArray(datasetFields) ? datasetFields : []
+  // Ensure value is an object
+  const safeValue = value || {}
+
+  return (
+    <div className="space-y-3">
+      {/* 用户输入字段 - 必填 */}
+      <div>
+        <div className="flex items-center gap-2 mb-2">
+          <span className="text-sm font-medium">用户输入 <span className="text-red-500">*</span></span>
+        </div>
+        <div className="flex items-center gap-2 p-2 border rounded">
+          <div className="flex items-center gap-2" style={{ minWidth: '200px', flexShrink: 0 }}>
+            <div 
+              style={{ 
+                padding: '4px 11px',
+                background: '#f5f5f5',
+                border: '1px solid #d9d9d9',
+                borderRadius: '6px',
+                fontSize: '14px',
+                lineHeight: '1.5715',
+                color: 'rgba(0, 0, 0, 0.88)',
+                flex: 1,
+                minWidth: '120px'
+              }}
+            >
+              用户输入
+            </div>
+            <Tag>String</Tag>
+          </div>
+          <div className="flex-1">
+            <Select
+              placeholder="评测集 请选择"
+              value={userInputValue}
+              onChange={(val) => onUserInputChange?.(val)}
+              style={{ width: '100%' }}
+            >
+              {safeDatasetFields.map((field) => {
+                if (!field || !field.key) return null
+                return (
+                  <Option key={field.key} value={field.key}>
+                    评测集 {field.name || field.key} ({field.key})
+                  </Option>
+                )
+              })}
+            </Select>
+          </div>
+        </div>
+      </div>
+
+      {/* Prompt变量映射 - 可选 */}
+      {Array.isArray(variables) && variables.length > 0 && (
+        <div>
+          <div className="text-sm text-gray-500 mb-2">
+            Prompt变量映射（可选）：为每个Prompt变量选择对应的数据集字段。
+          </div>
+          {variables.map((variable) => {
+            const currentMapping = safeValue[variable]
+
+            return (
+              <div key={variable} className="flex items-center gap-2 p-2 border rounded mb-2">
+                <div className="flex items-center gap-2" style={{ minWidth: '200px', flexShrink: 0 }}>
+                  <div 
+                    style={{ 
+                      padding: '4px 11px',
+                      background: '#f5f5f5',
+                      border: '1px solid #d9d9d9',
+                      borderRadius: '6px',
+                      fontSize: '14px',
+                      lineHeight: '1.5715',
+                      color: 'rgba(0, 0, 0, 0.88)',
+                      flex: 1,
+                      minWidth: '120px',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap'
+                    }}
+                    title={variable}
+                  >
+                    {variable}
+                  </div>
+                  <Tag>String</Tag>
+                </div>
+                <div className="flex-1">
+                  <Select
+                    placeholder="评测集 请选择"
+                    value={currentMapping}
+                    onChange={(val) => handleMappingChange(variable, val)}
+                    allowClear
+                    style={{ width: '100%' }}
+                  >
+                    {safeDatasetFields.map((field) => {
+                      if (!field || !field.key) return null
+                      return (
+                        <Option key={field.key} value={field.key}>
+                          评测集 {field.name || field.key} ({field.key})
+                        </Option>
+                      )
+                    })}
+                  </Select>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
 
 const STEPS = [
   { title: '基础信息' },
@@ -29,14 +169,20 @@ export default function ExperimentCreatePage() {
   const [evaluators, setEvaluators] = useState<any[]>([])
   const [evaluatorVersions, setEvaluatorVersions] = useState<Record<number, any[]>>({})
   const [modelSets, setModelSets] = useState<any[]>([])
+  const [prompts, setPrompts] = useState<any[]>([])
+  const [promptVersions, setPromptVersions] = useState<any[]>([])
+  const [promptVariables, setPromptVariables] = useState<string[]>([])
+  const [datasetFields, setDatasetFields] = useState<any[]>([])
   const [selectedDatasetId, setSelectedDatasetId] = useState<number | undefined>()
   const [selectedEvaluators, setSelectedEvaluators] = useState<number[]>([])
+  const [selectedPromptId, setSelectedPromptId] = useState<number | undefined>()
   const [formValues, setFormValues] = useState<any>({})
 
   useEffect(() => {
     loadDatasets()
     loadEvaluators()
     loadModelSets()
+    loadPrompts()
   }, [])
 
   useEffect(() => {
@@ -44,6 +190,30 @@ export default function ExperimentCreatePage() {
       loadDatasetVersions(selectedDatasetId)
     }
   }, [selectedDatasetId])
+
+  useEffect(() => {
+    if (selectedPromptId) {
+      loadPromptVersions(selectedPromptId)
+    }
+  }, [selectedPromptId])
+
+  useEffect(() => {
+    const selectedVersion = form.getFieldValue('prompt_version')
+    if (selectedPromptId && selectedVersion) {
+      loadPromptVariables(selectedPromptId, selectedVersion)
+    } else {
+      setPromptVariables([])
+    }
+  }, [selectedPromptId, form.getFieldValue('prompt_version')])
+
+  useEffect(() => {
+    const selectedVersionId = form.getFieldValue('dataset_version_id')
+    if (selectedVersionId && selectedDatasetId) {
+      loadDatasetFields(selectedVersionId)
+    } else {
+      setDatasetFields([])
+    }
+  }, [form.getFieldValue('dataset_version_id'), selectedDatasetId])
 
 
   const loadDatasets = async () => {
@@ -80,6 +250,79 @@ export default function ExperimentCreatePage() {
     } catch (error) {
       message.error('加载模型集失败')
       setModelSets([]) // Ensure it's always an array even on error
+    }
+  }
+
+  const loadPrompts = async () => {
+    try {
+      // Fetch all prompts with pagination (max page_size is 100)
+      let allPrompts: any[] = []
+      let pageNumber = 1
+      const pageSize = 100
+      let hasMore = true
+
+      while (hasMore) {
+        const response = await promptService.list({ 
+          page_number: pageNumber, 
+          page_size: pageSize 
+        })
+        const prompts = response.prompts || []
+        allPrompts = [...allPrompts, ...prompts]
+        
+        // Check if there are more pages
+        const total = response.total || 0
+        hasMore = allPrompts.length < total
+        pageNumber++
+      }
+
+      setPrompts(allPrompts)
+    } catch (error) {
+      message.error('加载Prompt失败')
+      setPrompts([])
+    }
+  }
+
+  const loadPromptVersions = async (promptId: number) => {
+    try {
+      const versions = await promptService.listVersions(promptId)
+      setPromptVersions(versions || [])
+    } catch (error) {
+      message.error('加载Prompt版本失败')
+      setPromptVersions([])
+    }
+  }
+
+  const loadPromptVariables = async (promptId: number, version: string | null) => {
+    try {
+      const versionParam = version === 'draft' || !version ? null : version
+      const variables = await promptService.getVariables(promptId, versionParam)
+      setPromptVariables(variables || [])
+    } catch (error) {
+      console.error('加载Prompt变量失败', error)
+      setPromptVariables([])
+    }
+  }
+
+  const loadDatasetFields = async (versionId: number) => {
+    try {
+      if (!selectedDatasetId) return
+      
+      const dataset = datasets.find(d => d.id === selectedDatasetId)
+      if (!dataset) return
+      
+      const version = datasetVersions.find(v => v.id === versionId)
+      if (!version) return
+
+      // Get dataset schema to access field definitions
+      const schema = await datasetService.getSchema(dataset.id)
+      if (schema?.field_definitions) {
+        setDatasetFields(schema.field_definitions || [])
+      } else {
+        setDatasetFields([])
+      }
+    } catch (error) {
+      console.error('加载数据集字段失败', error)
+      setDatasetFields([])
     }
   }
 
@@ -132,6 +375,20 @@ export default function ExperimentCreatePage() {
           if (values.target_type === 'model_set' && !values.model_set_id) {
             message.error('请选择模型集')
             return
+          }
+          if (values.target_type === 'prompt') {
+            if (!values.prompt_id) {
+              message.error('请选择Prompt')
+              return
+            }
+            if (!values.prompt_version) {
+              message.error('请选择Prompt版本')
+              return
+            }
+            if (!values.user_input_mapping) {
+              message.error('请配置用户输入字段映射')
+              return
+            }
           }
         }
         // If no target_type or empty, user is skipping this step - no validation needed
@@ -197,6 +454,14 @@ export default function ExperimentCreatePage() {
         evaluationTargetConfig = {
           type: 'model_set',
           model_set_id: values.model_set_id,
+        }
+      } else if (values.target_type === 'prompt') {
+        evaluationTargetConfig = {
+          type: 'prompt',
+          prompt_id: values.prompt_id,
+          prompt_version: values.prompt_version === 'draft' ? null : values.prompt_version,
+          user_input_mapping: values.user_input_mapping, // 用户输入字段映射（必填）
+          variable_mapping: values.variable_mapping || {}, // Prompt变量映射（可选）
         }
       }
       // If no target_type, evaluationTargetConfig will be undefined (optional)
@@ -331,8 +596,28 @@ export default function ExperimentCreatePage() {
                 placeholder="选择评测对象类型（可选）" 
                 allowClear
                 onChange={(value) => {
-                  // Clear related fields when target_type is cleared
+                  // Clear related fields when target_type is cleared or changed
                   if (!value) {
+                    form.setFieldsValue({
+                      model_set_id: undefined,
+                      prompt_id: undefined,
+                      prompt_version: undefined,
+                      variable_mapping: undefined,
+                    })
+                    setSelectedPromptId(undefined)
+                    setPromptVersions([])
+                    setPromptVariables([])
+                  } else if (value === 'model_set') {
+                    form.setFieldsValue({
+                      prompt_id: undefined,
+                      prompt_version: undefined,
+                      variable_mapping: undefined,
+                      user_input_mapping: undefined,
+                    })
+                    setSelectedPromptId(undefined)
+                    setPromptVersions([])
+                    setPromptVariables([])
+                  } else if (value === 'prompt') {
                     form.setFieldsValue({
                       model_set_id: undefined,
                     })
@@ -340,6 +625,7 @@ export default function ExperimentCreatePage() {
                 }}
               >
                 <Option value="model_set">模型集</Option>
+                <Option value="prompt">Prompt</Option>
           </Select>
         </Form.Item>
 
@@ -370,6 +656,86 @@ export default function ExperimentCreatePage() {
                           ))}
                         </Select>
                       </Form.Item>
+                    )}
+                    {targetType === 'prompt' && (
+                      <>
+                        <Form.Item
+                          name="prompt_id"
+                          label="Prompt"
+                          rules={[{ required: true, message: '请选择Prompt' }]}
+                        >
+                          <Select
+                            placeholder="选择Prompt"
+                            showSearch
+                            filterOption={(input, option) =>
+                              (option?.children as unknown as string)
+                                ?.toLowerCase()
+                                .includes(input.toLowerCase())
+                            }
+                            onChange={(value) => {
+                              setSelectedPromptId(value)
+                              form.setFieldsValue({
+                                prompt_version: undefined,
+                                variable_mapping: undefined,
+                                user_input_mapping: undefined,
+                              })
+                              setPromptVersions([])
+                              setPromptVariables([])
+                            }}
+                          >
+                            {prompts.map((p) => (
+                              <Option key={p.id} value={p.id}>
+                                {p.prompt_basic?.display_name || p.prompt_key}
+                              </Option>
+                            ))}
+                          </Select>
+                        </Form.Item>
+                        <Form.Item
+                          name="prompt_version"
+                          label="Prompt版本"
+                          rules={[{ required: true, message: '请选择Prompt版本' }]}
+                        >
+                          <Select
+                            placeholder="选择Prompt版本"
+                            disabled={!selectedPromptId}
+                            onChange={(value) => {
+                              if (selectedPromptId) {
+                                loadPromptVariables(selectedPromptId, value)
+                              }
+                              form.setFieldsValue({ 
+                                variable_mapping: undefined,
+                                user_input_mapping: undefined
+                              })
+                            }}
+                          >
+                            <Option value="draft">使用Draft（草稿）</Option>
+                            {promptVersions.map((v) => (
+                              <Option key={v.id} value={v.version}>
+                                {v.version} {v.description ? `- ${v.description}` : ''}
+                              </Option>
+                            ))}
+                          </Select>
+                        </Form.Item>
+                        <Form.Item
+                          name="user_input_mapping"
+                          label="字段映射"
+                          rules={[{ required: true, message: '请配置用户输入字段映射' }]}
+                          tooltip="用户输入字段必须映射到数据集中的字段。Prompt变量映射是可选的。"
+                        >
+                          <VariableMappingEditor
+                            variables={promptVariables}
+                            datasetFields={datasetFields}
+                            value={form.getFieldValue('variable_mapping') || {}}
+                            onChange={(mapping) => {
+                              form.setFieldsValue({ variable_mapping: mapping })
+                            }}
+                            userInputValue={form.getFieldValue('user_input_mapping')}
+                            onUserInputChange={(fieldKey) => {
+                              form.setFieldsValue({ user_input_mapping: fieldKey })
+                            }}
+                          />
+                        </Form.Item>
+                      </>
                     )}
                   </>
                 )
@@ -462,6 +828,45 @@ export default function ExperimentCreatePage() {
                           return selectedModelSet ? `${selectedModelSet.name} (${selectedModelSet.type === 'agent_api' ? '智能体API' : 'LLM模型'})` : '-'
                         })()}
                       </div>
+                    </>
+                  ) : currentFormValues.target_type === 'prompt' ? (
+                    <>
+                      <div><strong>类型：</strong>Prompt</div>
+                      <div><strong>Prompt：</strong>
+                        {(() => {
+                          const selectedPrompt = prompts.find((p) => p.id === currentFormValues.prompt_id)
+                          return selectedPrompt ? (selectedPrompt.prompt_basic?.display_name || selectedPrompt.prompt_key) : '-'
+                        })()}
+                      </div>
+                      <div><strong>版本：</strong>
+                        {currentFormValues.prompt_version === 'draft' ? 'Draft（草稿）' : currentFormValues.prompt_version || '-'}
+                      </div>
+                      {currentFormValues.user_input_mapping && (
+                        <div>
+                          <strong>用户输入映射：</strong>
+                          <div className="mt-1 text-xs">
+                            {(() => {
+                              const field = Array.isArray(datasetFields) ? datasetFields.find(f => f && f.key === currentFormValues.user_input_mapping) : undefined
+                              return field && field.name ? `${field.name} (${currentFormValues.user_input_mapping})` : String(currentFormValues.user_input_mapping)
+                            })()}
+                          </div>
+                        </div>
+                      )}
+                      {currentFormValues.variable_mapping && Object.keys(currentFormValues.variable_mapping).length > 0 && (
+                        <div>
+                          <strong>变量映射：</strong>
+                          <div className="mt-1 space-y-1">
+                            {Object.entries(currentFormValues.variable_mapping).map(([varName, fieldKey]) => {
+                              const field = Array.isArray(datasetFields) ? datasetFields.find(f => f && f.key === fieldKey) : undefined
+                              return (
+                                <div key={varName} className="text-xs">
+                                  {varName} → {field && field.name ? `${field.name} (${fieldKey})` : String(fieldKey)}
+                                </div>
+                              )
+                            })}
+                          </div>
+                        </div>
+                      )}
                     </>
                   ) : (
                     <div className="text-gray-500">未配置（将直接使用数据集数据）</div>

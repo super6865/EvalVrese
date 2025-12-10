@@ -780,3 +780,30 @@ async def list_executions(
         "message": "Get execution history successfully",
     }
 
+
+@router.get("/{prompt_id}/variables", response_model=Dict[str, Any])
+@handle_api_errors
+@handle_not_found("Prompt not found")
+async def get_prompt_variables(
+    prompt_id: int,
+    version: Optional[str] = Query(None, description="Version string, or 'draft' for draft, or None for draft"),
+    db: Session = Depends(get_db),
+):
+    """Get variables from prompt messages"""
+    service = PromptService(db)
+    
+    # Check if prompt exists
+    prompt = service.get_prompt(prompt_id)
+    if not prompt:
+        raise HTTPException(status_code=404, detail="Prompt not found")
+    
+    try:
+        variables = service.extract_variables_from_prompt(prompt_id, version)
+        return {
+            "success": True,
+            "data": {"variables": variables},
+            "message": "Get variables successfully",
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+

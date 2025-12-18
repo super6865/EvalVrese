@@ -591,7 +591,7 @@ async def debug_prompt(
     
     # Directly call LLM model for debugging (not using evaluator)
     # Build autogen config
-    from app.utils.autogen_helper import create_autogen_config_from_model_config
+    from app.utils.autogen_helper import create_autogen_config_from_model_config, _clear_agent_chat_messages
     from autogen import ConversableAgent
     import asyncio
     
@@ -645,6 +645,10 @@ async def debug_prompt(
             human_input_mode="NEVER",
             max_consecutive_auto_reply=1,
         )
+        
+        # Clear chat history before generating reply
+        # This ensures each debug invocation is independent and doesn't reuse previous results
+        _clear_agent_chat_messages(agent)
         
         # Generate reply using AutoGen agent
         loop = asyncio.get_event_loop()

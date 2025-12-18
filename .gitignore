@@ -115,3 +115,6 @@ openspec/
 *.ai-tmp.*
 .ai-backup/
 AGENTS.md
+
+
+.tmp/

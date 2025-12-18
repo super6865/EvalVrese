@@ -474,7 +474,7 @@ class ModelSetService:
             
             # Create autogen config from model config (supports qwen and all other model types)
             # Import here to avoid circular import with autogen_helper
-            from app.utils.autogen_helper import create_autogen_config_from_model_config
+            from app.utils.autogen_helper import create_autogen_config_from_model_config, _clear_agent_chat_messages
             
             model_config_dict = {
                 "model_type": config.get('model_type', 'openai'),
@@ -496,6 +496,10 @@ class ModelSetService:
                 human_input_mode="NEVER",
                 max_consecutive_auto_reply=1,
             )
+            
+            # Clear chat history before generating reply
+            # This ensures each debug invocation is independent and doesn't reuse previous results
+            _clear_agent_chat_messages(agent)
             
             # Generate reply using AutoGen agent
             # Note: AutoGen's generate_reply is synchronous, but we're in async context

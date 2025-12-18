@@ -631,9 +631,12 @@ class ExperimentService:
             if experiment.evaluation_target_config and experiment.evaluation_target_config.get("type") != "none":
                 logger.info(f"[CallTarget] Invoking evaluation target: {experiment.evaluation_target_config.get('type')}")
                 
-                # Build input_data from turn_fields instead of using item.data_content directly
-                # This ensures we pass the correct input fields to the evaluation target
+                # Build input_data from turn_fields and data_content
+                # ONLY use 'name' as keys in input_data (not 'key')
+                # This simplifies the logic and avoids confusion between key and name
                 input_data = {}
+                
+                # First, extract from turn_fields (uses 'name' as key)
                 if turn_fields:
                     # Extract text values from turn_fields
                     for field_name, content in turn_fields.items():
@@ -641,16 +644,81 @@ class ExperimentService:
                             input_data[field_name] = content.text
                         elif content:
                             input_data[field_name] = str(content)
+                    logger.info(f"[CallTarget] Extracted {len(input_data)} fields from turn_fields: {list(input_data.keys())}")
                 
-                # If no fields extracted from turn_fields, fallback to data_content
+                # Extract from data_content, but ONLY add by 'name' (not 'key')
+                # We'll build key-to-name mapping separately for conversion purposes
+                if isinstance(item.data_content, dict):
+                    turns_data = item.data_content.get("turns")
+                    if isinstance(turns_data, list) and len(turns_data) > 0:
+                        first_turn = turns_data[0]
+                        field_data_list = first_turn.get("field_data_list", [])
+                        if isinstance(field_data_list, list):
+                            logger.info(f"[CallTarget] Extracting fields from data_content.turns[0].field_data_list ({len(field_data_list)} fields)")
+                            fields_added_by_name = 0
+                            for field_data in field_data_list:
+                                if isinstance(field_data, dict):
+                                    field_key = field_data.get("key")
+                                    field_name = field_data.get("name")
+                                    field_content = field_data.get("content", {})
+                                    
+                                    # Extract text value
+                                    text_value = None
+                                    if isinstance(field_content, dict):
+                                        text_value = field_content.get("text")
+                                    elif isinstance(field_content, str):
+                                        text_value = field_content
+                                    
+                                    if text_value is not None:
+                                        text_str = str(text_value)
+                                        # ONLY add by 'name' (if not already added from turn_fields)
+                                        if field_name and field_name not in input_data:
+                                            input_data[field_name] = text_str
+                                            fields_added_by_name += 1
+                                            logger.debug(f"[CallTarget] Added field by name '{field_name}'")
+                            
+                            logger.info(f"[CallTarget] Extracted {len(input_data)} field entries from data_content (using name only). Added {fields_added_by_name} fields by name.")
+                    else:
+                        logger.warning(f"[CallTarget] data_content.turns is not a list or is empty")
+                else:
+                    logger.warning(f"[CallTarget] item.data_content is not a dict: {type(item.data_content)}")
+                
+                # If still no fields, fallback to copying entire data_content
                 if not input_data:
-                    logger.warning(f"[CallTarget] No fields extracted from turn_fields, falling back to data_content")
+                    logger.warning(f"[CallTarget] ⚠️ No fields extracted from turn_fields or data_content.turns, falling back to data_content copy")
                     if isinstance(item.data_content, dict):
                         input_data = item.data_content.copy()
                     else:
                         input_data = {"data": str(item.data_content)}
                 
+                # Build key-to-name mapping for user_input_mapping conversion
+                # This helps _invoke_prompt convert field 'key' (e.g., "输入") to 'name' (e.g., "input")
+                key_to_name_mapping = {}
+                if isinstance(item.data_content, dict):
+                    turns_data = item.data_content.get("turns")
+                    if isinstance(turns_data, list) and len(turns_data) > 0:
+                        first_turn = turns_data[0]
+                        field_data_list = first_turn.get("field_data_list", [])
+                        if isinstance(field_data_list, list):
+                            for field_data in field_data_list:
+                                if isinstance(field_data, dict):
+                                    field_key = field_data.get("key")
+                                    field_name = field_data.get("name")
+                                    if field_key and field_name:
+                                        key_to_name_mapping[field_key] = field_name
+                
+                # Add key-to-name mapping to input_data as metadata (prefixed with _ to avoid conflicts)
+                if key_to_name_mapping:
+                    input_data["_key_to_name_mapping"] = key_to_name_mapping
+                    logger.debug(f"[CallTarget] Added key-to-name mapping: {key_to_name_mapping}")
+                
                 logger.info(f"[CallTarget] Built input_data with keys: {list(input_data.keys())}")
+                # Log detailed information about input_data values
+                for key, value in input_data.items():
+                    if key != "_key_to_name_mapping":  # Skip metadata
+                        value_type = type(value).__name__
+                        value_preview = str(value)[:100] if value else "None"
+                        logger.debug(f"[CallTarget] input_data['{key}']: type={value_type}, value={value_preview}...")
                 logger.debug(f"[CallTarget] input_data content (first 500 chars): {json.dumps(input_data, ensure_ascii=False, default=str)[:500]}")
                 
                 actual_output = await self._invoke_evaluation_target(

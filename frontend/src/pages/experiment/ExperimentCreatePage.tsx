@@ -80,8 +80,11 @@ function VariableMappingEditor({
             >
               {safeDatasetFields.map((field) => {
                 if (!field || !field.key) return null
+                // Use field.name for user_input_mapping to match backend turn_fields keys
+                // Backend uses field.name as keys in turn_fields, so user_input_mapping should also use name
+                const fieldValue = field.name || field.key
                 return (
-                  <Option key={field.key} value={field.key}>
+                  <Option key={field.key} value={fieldValue}>
                     评测集 {field.name || field.key} ({field.key})
                   </Option>
                 )
@@ -846,8 +849,13 @@ export default function ExperimentCreatePage() {
                           <strong>用户输入映射：</strong>
                           <div className="mt-1 text-xs">
                             {(() => {
-                              const field = Array.isArray(datasetFields) ? datasetFields.find(f => f && f.key === currentFormValues.user_input_mapping) : undefined
-                              return field && field.name ? `${field.name} (${currentFormValues.user_input_mapping})` : String(currentFormValues.user_input_mapping)
+                              // user_input_mapping now stores field.name, so find by name first, then by key as fallback
+                              const field = Array.isArray(datasetFields) 
+                                ? datasetFields.find(f => f && (f.name === currentFormValues.user_input_mapping || f.key === currentFormValues.user_input_mapping))
+                                : undefined
+                              return field 
+                                ? `${field.name || currentFormValues.user_input_mapping} (${field.key})` 
+                                : String(currentFormValues.user_input_mapping)
                             })()}
                           </div>
                         </div>

@@ -4,24 +4,96 @@ AutoGen helper for evaluator implementation
 from typing import Dict, Any, Optional, List
 import json
 import re
+import logging
 from autogen import ConversableAgent
 from app.core.config import settings
 
+logger = logging.getLogger(__name__)
+
 
 def _clear_agent_chat_messages(agent: ConversableAgent) -> None:
+    """
+    Clear all chat messages and cached state from AutoGen ConversableAgent.
+    This ensures each invocation is independent and doesn't reuse previous results.
+    """
+    if not agent:
+        return
+    
     try:
+        # Clear chat_messages (primary message history)
         if hasattr(agent, 'chat_messages'):
             if isinstance(agent.chat_messages, list):
                 agent.chat_messages.clear()
+                logger.debug("[ClearCache] Cleared chat_messages (list)")
             elif isinstance(agent.chat_messages, dict):
                 agent.chat_messages.clear()
+                logger.debug("[ClearCache] Cleared chat_messages (dict)")
             else:
                 try:
                     agent.chat_messages = []
+                    logger.debug("[ClearCache] Reset chat_messages to empty list")
                 except (AttributeError, TypeError):
                     pass
-    except Exception:
-        pass
+        
+        # Clear _oai_messages if exists (OpenAI API messages cache)
+        if hasattr(agent, '_oai_messages'):
+            if isinstance(agent._oai_messages, list):
+                agent._oai_messages.clear()
+                logger.debug("[ClearCache] Cleared _oai_messages (list)")
+            elif isinstance(agent._oai_messages, dict):
+                agent._oai_messages.clear()
+                logger.debug("[ClearCache] Cleared _oai_messages (dict)")
+            else:
+                try:
+                    agent._oai_messages = []
+                    logger.debug("[ClearCache] Reset _oai_messages to empty list")
+                except (AttributeError, TypeError):
+                    pass
+        
+        # DO NOT clear _oai_system_message - it's required by AutoGen's generate_oai_reply
+        # AutoGen expects _oai_system_message to be a string or list, not None
+        # The system message is part of the agent's configuration, not chat history
+        # We only need to clear chat history (chat_messages and _oai_messages)
+        
+        # Clear client cache if exists (may contain token usage, cost, etc.)
+        if hasattr(agent, 'client'):
+            client = agent.client
+            if client:
+                # Clear cost cache if exists
+                if hasattr(client, 'cost'):
+                    try:
+                        if isinstance(client.cost, dict):
+                            client.cost.clear()
+                            logger.debug("[ClearCache] Cleared client.cost")
+                    except (AttributeError, TypeError):
+                        pass
+                
+                # Clear usage cache if exists
+                if hasattr(client, 'usage'):
+                    try:
+                        if isinstance(client.usage, dict):
+                            client.usage.clear()
+                            logger.debug("[ClearCache] Cleared client.usage")
+                    except (AttributeError, TypeError):
+                        pass
+        
+        # Clear any message history in nested structures
+        if hasattr(agent, 'messages'):
+            try:
+                if isinstance(agent.messages, list):
+                    agent.messages.clear()
+                    logger.debug("[ClearCache] Cleared messages (list)")
+                elif isinstance(agent.messages, dict):
+                    agent.messages.clear()
+                    logger.debug("[ClearCache] Cleared messages (dict)")
+            except (AttributeError, TypeError):
+                pass
+        
+        logger.info("[ClearCache] ✅ Successfully cleared all agent chat messages and cached state")
+        
+    except Exception as e:
+        logger.warning(f"[ClearCache] ⚠️ Warning: Failed to clear some agent cache: {str(e)}")
+        # Don't raise exception, just log warning
 
 
 def create_autogen_config_from_model_config(model_config_dict: Dict[str, Any]) -> Dict[str, Any]:
@@ -353,19 +425,140 @@ class AutoGenTargetInvoker:
         self.config = config
         self.db = db
         self.target_type = config.get("type", "none")
-        self.agent = None
+        self.agent = None  # Will be created fresh for each invocation
         self.tools = []
         
-        if self.target_type == "model_set":
-            self._init_model_set_target()
-        elif self.target_type == "prompt":
-            self._init_prompt_target()
+        # Store configuration but don't create agent yet
+        # Agent will be created fresh for each invoke() call to avoid state pollution
+        if self.target_type == "prompt":
+            # Load prompt configuration (but don't create agent yet)
+            self._load_prompt_config()
+        elif self.target_type == "model_set":
+            # Load model_set configuration (but don't create agent yet)
+            self._load_model_set_config()
         elif self.target_type == "api":
             self._init_api_target()
         elif self.target_type == "none":
             pass
         else:
             raise ValueError(f"Unsupported target type: {self.target_type}")
+    
+    def _load_model_set_config(self):
+        """Load model_set configuration (without creating agent)"""
+        try:
+            from app.services.model_set_service import ModelSetService
+        except ImportError as e:
+            raise ImportError(
+                f"Failed to import ModelSetService: {str(e)}. "
+                "Please ensure the module is available and Python path is correctly configured."
+            ) from e
+        
+        model_set_id = self.config.get("model_set_id")
+        if not model_set_id:
+            raise ValueError("model_set_id is required for model_set type")
+        
+        try:
+            model_set_service = ModelSetService(self.db)
+            model_set = model_set_service.get_model_set_by_id(model_set_id)
+        except Exception as e:
+            raise RuntimeError(f"Failed to initialize model set service: {str(e)}") from e
+        
+        if not model_set:
+            raise ValueError(f"Model set {model_set_id} not found")
+        
+        # Store model_set config for later use
+        self.model_set_config = model_set
+    
+    def _create_model_set_agent(self) -> ConversableAgent:
+        """Create a fresh model_set agent instance for each invocation"""
+        if not hasattr(self, 'model_set_config'):
+            raise ValueError("Model set config not loaded. Call _load_model_set_config first.")
+        
+        model_set = self.model_set_config
+        
+        if model_set["type"] == "llm_model":
+            # Use AutoGen ConversableAgent for LLM models
+            model_config = model_set["config"]
+            
+            # Ensure timeout is an integer (may come as string from JSON)
+            timeout_value = model_config.get("timeout", 60)
+            if isinstance(timeout_value, str):
+                try:
+                    timeout_value = int(timeout_value)
+                except (ValueError, TypeError):
+                    timeout_value = 60
+            elif not isinstance(timeout_value, int):
+                timeout_value = int(timeout_value) if timeout_value is not None else 60
+            
+            # Ensure temperature is a float (may come as string from JSON)
+            temperature_value = model_config.get("temperature")
+            if temperature_value is not None:
+                if isinstance(temperature_value, str):
+                    try:
+                        temperature_value = float(temperature_value)
+                    except (ValueError, TypeError):
+                        temperature_value = None
+                elif not isinstance(temperature_value, (int, float)):
+                    try:
+                        temperature_value = float(temperature_value)
+                    except (ValueError, TypeError):
+                        temperature_value = None
+            
+            # Check and log temperature setting
+            if temperature_value is None or temperature_value == 0:
+                logger.warning(f"[CreateModelSetAgent] ⚠️ Temperature is {temperature_value}, which may cause deterministic responses. Consider setting temperature > 0 for randomness.")
+            else:
+                logger.info(f"[CreateModelSetAgent] Temperature set to {temperature_value}")
+            
+            # Ensure max_tokens is an integer (may come as string from JSON)
+            max_tokens_value = model_config.get("max_tokens")
+            if max_tokens_value is not None:
+                if isinstance(max_tokens_value, str):
+                    try:
+                        max_tokens_value = int(max_tokens_value)
+                    except (ValueError, TypeError):
+                        max_tokens_value = None
+                elif not isinstance(max_tokens_value, int):
+                    try:
+                        max_tokens_value = int(max_tokens_value)
+                    except (ValueError, TypeError):
+                        max_tokens_value = None
+            
+            # Convert model config to autogen config
+            autogen_config = create_autogen_config_from_model_config({
+                "model_type": model_config.get("model_type", "openai"),
+                "model_version": model_config.get("model_version"),
+                "api_key": model_config.get("api_key"),
+                "api_base": model_config.get("api_base"),
+                "temperature": temperature_value,
+                "max_tokens": max_tokens_value,
+                "timeout": timeout_value,
+            })
+            
+            # Create fresh agent instance for this invocation
+            logger.info(f"[CreateModelSetAgent] Creating fresh agent instance (temperature={temperature_value})")
+            agent = ConversableAgent(
+                name="target",
+                system_message="You are a helpful assistant. Respond to user requests directly and concisely.",
+                llm_config=autogen_config,
+                human_input_mode="NEVER",
+                max_consecutive_auto_reply=1,
+            )
+            return agent
+        elif model_set["type"] == "agent_api":
+            # For agent API, create a simple agent
+            self._create_api_tool(model_set["config"])
+            logger.info(f"[CreateModelSetAgent] Creating fresh agent instance for API calls")
+            agent = ConversableAgent(
+                name="target",
+                system_message="You are a helpful assistant that can call external APIs.",
+                llm_config=None,  # No LLM needed for direct API calls
+                human_input_mode="NEVER",
+                max_consecutive_auto_reply=1,
+            )
+            return agent
+        else:
+            raise ValueError(f"Unsupported model set type: {model_set['type']}")
     
     def _init_model_set_target(self):
         """Initialize model_set type target using AutoGen"""
@@ -469,8 +662,8 @@ class AutoGenTargetInvoker:
         else:
             raise ValueError(f"Unsupported model set type: {model_set['type']}")
     
-    def _init_prompt_target(self):
-        """Initialize prompt type target using AutoGen"""
+    def _load_prompt_config(self):
+        """Load prompt configuration (without creating agent)"""
         if not self.db:
             raise ValueError("Prompt type target requires database session")
         
@@ -533,11 +726,17 @@ class AutoGenTargetInvoker:
         else:
             self.prompt_variables = {}
         
-        # Get model_config_id from prompt's model_config
-        model_config_id = self.prompt_model_config.get("model_config_id")
-        if not model_config_id:
-            raise ValueError("Prompt model_config must contain model_config_id")
+        # Store variable_mapping and user_input_mapping for later use
+        self.variable_mapping = self.config.get("variable_mapping", {})
+        self.user_input_mapping = self.config.get("user_input_mapping")  # Field key for user input
         
+        # Store model_config_id for later use (will load and create agent in _create_prompt_agent)
+        self.prompt_model_config_id = self.prompt_model_config.get("model_config_id")
+        if not self.prompt_model_config_id:
+            raise ValueError("Prompt model_config must contain model_config_id")
+    
+    def _create_prompt_agent(self) -> ConversableAgent:
+        """Create a fresh prompt agent instance for each invocation"""
         # Load model configuration
         from app.services.model_config_service import ModelConfigService
         from app.models.model_config import ModelConfig
@@ -545,15 +744,15 @@ class AutoGenTargetInvoker:
         
         model_config_service = ModelConfigService(self.db)
         model_config_dict = model_config_service.get_config_by_id(
-            model_config_id,
+            self.prompt_model_config_id,
             include_sensitive=True
         )
         
         if not model_config_dict:
-            raise ValueError(f"Model configuration {model_config_id} not found")
+            raise ValueError(f"Model configuration {self.prompt_model_config_id} not found")
         
         # Decrypt API key for internal use
-        db_config = self.db.query(ModelConfig).filter(ModelConfig.id == model_config_id).first()
+        db_config = self.db.query(ModelConfig).filter(ModelConfig.id == self.prompt_model_config_id).first()
         if db_config and db_config.api_key:
             model_config_dict['api_key'] = decrypt_api_key(db_config.api_key)
         
@@ -562,6 +761,13 @@ class AutoGenTargetInvoker:
             model_config_dict['temperature'] = self.prompt_model_config["temperature"]
         if self.prompt_model_config.get("max_tokens") is not None:
             model_config_dict['max_tokens'] = self.prompt_model_config["max_tokens"]
+        
+        # Check and log temperature setting
+        temperature = model_config_dict.get("temperature")
+        if temperature is None or temperature == 0:
+            logger.warning(f"[CreatePromptAgent] ⚠️ Temperature is {temperature}, which may cause deterministic/responses. Consider setting temperature > 0 for randomness.")
+        else:
+            logger.info(f"[CreatePromptAgent] Temperature set to {temperature}")
         
         # Create autogen config
         autogen_config = create_autogen_config_from_model_config(model_config_dict)
@@ -577,8 +783,9 @@ class AutoGenTargetInvoker:
                     system_message = str(content)
                 break
         
-        # Initialize agent
-        self.agent = ConversableAgent(
+        # Create fresh agent instance for this invocation
+        logger.info(f"[CreatePromptAgent] Creating fresh agent instance (temperature={temperature})")
+        agent = ConversableAgent(
             name="target",
             system_message=system_message,
             llm_config=autogen_config,
@@ -586,9 +793,13 @@ class AutoGenTargetInvoker:
             max_consecutive_auto_reply=1,
         )
         
-        # Store variable_mapping and user_input_mapping for later use
-        self.variable_mapping = self.config.get("variable_mapping", {})
-        self.user_input_mapping = self.config.get("user_input_mapping")  # Field key for user input
+        return agent
+    
+    def _init_prompt_target(self):
+        """Initialize prompt type target using AutoGen (deprecated - use _load_prompt_config instead)"""
+        # This method is kept for backward compatibility but now just calls _load_prompt_config
+        self._load_prompt_config()
+        # Note: Agent creation is now done in _create_prompt_agent() called from invoke()
     
     def _init_api_target(self):
         """Initialize API type target - create a tool for API calling"""
@@ -655,7 +866,7 @@ class AutoGenTargetInvoker:
                 return await self._invoke_llm(input_data)
         
         if self.target_type == "prompt":
-            # Use prompt agent
+            # Use prompt agent - create fresh agent for each invocation
             return await self._invoke_prompt(input_data)
         
         raise ValueError(f"Unsupported target type: {self.target_type}")
@@ -678,10 +889,10 @@ class AutoGenTargetInvoker:
         if not prompt_text:
             prompt_text = json.dumps(input_data, ensure_ascii=False)
         
-        # Clear chat_messages history before generating reply
-        # This ensures each target invocation is independent and doesn't reuse previous results
-        if self.agent:
-            _clear_agent_chat_messages(self.agent)
+        # Create fresh agent instance for this invocation to avoid state pollution
+        # This ensures each call is completely independent
+        logger.info(f"[InvokeLLM] Creating fresh agent instance for this invocation")
+        agent = self._create_model_set_agent()
         
         # Generate reply using AutoGen agent
         # Note: AutoGen's generate_reply is synchronous, but we're in async context
@@ -692,7 +903,7 @@ class AutoGenTargetInvoker:
         try:
             response = await loop.run_in_executor(
                 None,
-                lambda: self.agent.generate_reply(
+                lambda: agent.generate_reply(
                     messages=[{"role": "user", "content": prompt_text}]
                 )
             )
@@ -724,18 +935,108 @@ class AutoGenTargetInvoker:
     
     async def _invoke_prompt(self, input_data: Dict[str, Any]) -> str:
         """Invoke prompt target using AutoGen agent"""
+        # Log diagnostic information
+        logger.info(f"[InvokePrompt] ========== Invoking prompt target ==========")
+        logger.info(f"[InvokePrompt] user_input_mapping: {self.user_input_mapping}")
+        logger.info(f"[InvokePrompt] variable_mapping: {self.variable_mapping}")
+        logger.info(f"[InvokePrompt] input_data keys: {list(input_data.keys()) if isinstance(input_data, dict) else 'not a dict'}")
+        logger.debug(f"[InvokePrompt] input_data content (first 500 chars): {json.dumps(input_data, ensure_ascii=False, default=str)[:500]}")
+        
         # Get user input value from input_data using user_input_mapping
         # Add it to input_data as "user_input" for use in prompt templates
-        if self.user_input_mapping and self.user_input_mapping in input_data:
-            user_input_value = input_data[self.user_input_mapping]
+        # Since input_data only uses 'name' as keys, we need to convert user_input_mapping from 'key' to 'name' if needed
+        user_input_set = False
+        if self.user_input_mapping:
+            user_input_value = None
+            matched_key = None
+            
+            # Get key-to-name mapping from input_data (added by _call_target)
+            key_to_name_mapping = input_data.get("_key_to_name_mapping", {})
+            logger.info(f"[InvokePrompt] user_input_mapping: '{self.user_input_mapping}'")
+            logger.info(f"[InvokePrompt] Key-to-name mapping: {key_to_name_mapping}")
+            logger.info(f"[InvokePrompt] Available input_data keys: {list(input_data.keys())}")
+            
+            # Determine the actual field name to use
+            # If user_input_mapping is a key (e.g., "输入"), convert it to name (e.g., "input")
+            # If user_input_mapping is already a name, use it directly
+            field_name_to_use = None
+            
+            # First, check if user_input_mapping is in key-to-name mapping (it's a key)
+            if key_to_name_mapping and self.user_input_mapping in key_to_name_mapping:
+                field_name_to_use = key_to_name_mapping[self.user_input_mapping]
+                logger.info(f"[InvokePrompt] ✅ Converted key '{self.user_input_mapping}' to name '{field_name_to_use}' using mapping")
+            # Otherwise, assume user_input_mapping is already a name
+            elif self.user_input_mapping in input_data:
+                field_name_to_use = self.user_input_mapping
+                logger.info(f"[InvokePrompt] ✅ user_input_mapping '{self.user_input_mapping}' is already a name, using directly")
+            else:
+                # user_input_mapping is neither in mapping nor in input_data
+                logger.warning(f"[InvokePrompt] ⚠️ user_input_mapping '{self.user_input_mapping}' not found in mapping or input_data")
+            
+            # Now try to get the value using the determined field name
+            if field_name_to_use:
+                if field_name_to_use in input_data:
+                    user_input_value = input_data[field_name_to_use]
+                    matched_key = field_name_to_use
+                    # Log detailed information about the value
+                    value_type = type(user_input_value).__name__
+                    logger.info(f"[InvokePrompt] ✅ Found value using field name '{field_name_to_use}': type={value_type}, value={str(user_input_value)[:200]}...")
+                    # If value is a dict, try to extract text field
+                    if isinstance(user_input_value, dict):
+                        if "text" in user_input_value:
+                            user_input_value = user_input_value["text"]
+                            logger.info(f"[InvokePrompt] ✅ Extracted 'text' from dict: {str(user_input_value)[:200]}...")
+                        else:
+                            logger.warning(f"[InvokePrompt] ⚠️ Value is dict but has no 'text' key. Keys: {list(user_input_value.keys())}")
+                else:
+                    logger.error(f"[InvokePrompt] ❌ Field name '{field_name_to_use}' (converted from '{self.user_input_mapping}') not found in input_data. Available keys: {list(input_data.keys())}")
+            
+            # Fallback: Try common field names that might correspond to user input
+            if user_input_value is None:
+                common_input_names = ["input", "user_input", "query", "text", "content", "message"]
+                for name_key in common_input_names:
+                    if name_key in input_data:
+                        user_input_value = input_data[name_key]
+                        matched_key = name_key
+                        logger.warning(f"[InvokePrompt] ⚠️ Using fallback field '{name_key}' for user_input_mapping '{self.user_input_mapping}'")
+                        break
+            
+            # Set user_input if we found a value
             if user_input_value is not None:
-                # Add user_input to input_data so it can be used in prompt templates
+                # Ensure user_input_value is a string
+                # Handle different value types
+                if isinstance(user_input_value, dict):
+                    # If it's a dict, try to extract text
+                    if "text" in user_input_value:
+                        user_input_value = user_input_value["text"]
+                        logger.info(f"[InvokePrompt] ✅ Extracted 'text' from dict value")
+                    else:
+                        # Convert entire dict to string as fallback
+                        user_input_value = json.dumps(user_input_value, ensure_ascii=False)
+                        logger.warning(f"[InvokePrompt] ⚠️ Value is dict without 'text', converting to JSON string")
+                elif not isinstance(user_input_value, str):
+                    # Convert other types to string
+                    user_input_value = str(user_input_value)
+                    logger.info(f"[InvokePrompt] ✅ Converted value to string (type was {type(user_input_value).__name__})")
+                
                 input_data["user_input"] = str(user_input_value)
+                user_input_set = True
+                logger.info(f"[InvokePrompt] ✅ Set user_input (final value type: {type(input_data['user_input']).__name__}, length: {len(input_data['user_input'])}): {input_data['user_input'][:200]}...")
+                if matched_key == self.user_input_mapping:
+                    logger.info(f"[InvokePrompt] ✅ Set user_input from field '{self.user_input_mapping}'")
+                else:
+                    logger.info(f"[InvokePrompt] ✅ Set user_input from field '{matched_key}' (mapped from '{self.user_input_mapping}')")
+            else:
+                logger.error(f"[InvokePrompt] ❌ Field '{self.user_input_mapping}' not found in input_data. Available keys: {list(input_data.keys())}")
+                logger.error(f"[InvokePrompt] ❌ Key-to-name mapping: {key_to_name_mapping}")
+                logger.error(f"[InvokePrompt] ❌ This suggests that _call_target did not properly extract fields from data_content or the mapping is incorrect.")
+        else:
+            logger.warning(f"[InvokePrompt] ⚠️ user_input_mapping is not set")
         
         # Build messages from prompt configuration
         messages = []
         
-        for msg_template in self.prompt_messages:
+        for msg_idx, msg_template in enumerate(self.prompt_messages):
             role = msg_template.get("role", "user")
             content_template = msg_template.get("content", "")
             
@@ -744,6 +1045,8 @@ class AutoGenTargetInvoker:
                 content_text = content_template.get("text", "")
             else:
                 content_text = str(content_template)
+            
+            original_content = content_text  # Keep original for logging
             
             # Replace variables in content
             # Support both {variable} and {{variable}} formats
@@ -758,44 +1061,59 @@ class AutoGenTargetInvoker:
                     if field_name and field_name in input_data:
                         value = input_data[field_name]
                         value_str = str(value) if value is not None else ""
+                        logger.debug(f"[InvokePrompt] Message[{msg_idx}] Variable '{var_name}' mapped to field '{field_name}': {value_str[:100]}...")
+                    else:
+                        logger.warning(f"[InvokePrompt] Message[{msg_idx}] Variable '{var_name}' mapped to field '{field_name}' but field not found in input_data")
                 
                 # Priority 2: Use prompt's default variable value (from prompt management)
                 if value_str is None:
                     var_value = self.prompt_variables.get(var_name)
                     if var_value is not None:
                         value_str = str(var_value)
+                        logger.debug(f"[InvokePrompt] Message[{msg_idx}] Variable '{var_name}' using default value: {value_str[:100]}...")
                 
                 # Replace placeholders if we have a value
                 if value_str is not None:
                     placeholder_single = "{" + var_name + "}"
                     placeholder_double = "{{" + var_name + "}}"
+                    # Replace double braces first, then single braces
                     content_text = content_text.replace(placeholder_double, value_str)
                     content_text = content_text.replace(placeholder_single, value_str)
             
-            # Replace user_input placeholder if exists (common patterns)
-            if "user_input" in input_data:
+            # Handle user input: user input is a default parameter, should be directly used as message content
+            # For user role messages, append user input to the message content
+            # User input is NOT a placeholder variable - it's a default parameter that should always be included
+            if role == "user" and "user_input" in input_data:
                 user_input_value = input_data["user_input"]
-                user_input_placeholders = [
-                    '{user_input}', '{{user_input}}', 
-                    '{input}', '{{input}}', 
-                    '{query}', '{{query}}',
-                    '{user_query}', '{{user_query}}'
-                ]
-                for placeholder in user_input_placeholders:
-                    if placeholder in content_text:
-                        content_text = content_text.replace(placeholder, user_input_value)
-                        break
-                
-                # If user message is empty or only whitespace after variable replacement,
-                # use user_input as the message content
-                if role == "user" and not content_text.strip():
-                    content_text = user_input_value
+                if user_input_value:
+                    # If message content is empty, use user input directly
+                    if not content_text.strip():
+                        content_text = str(user_input_value)
+                        logger.warning(f"[InvokePrompt] Message[{msg_idx}] User message was empty, using user_input directly as content: {str(user_input_value)[:200]}...")
+                    else:
+                        # Otherwise, append user input to the message content
+                        # Format: original_content + "\n" + user_input
+                        content_text = content_text.strip() + "\n" + str(user_input_value)
+                        logger.warning(f"[InvokePrompt] Message[{msg_idx}] Appended user_input to message content. Original: {original_content[:100]}..., User input: {str(user_input_value)[:200]}...")
+                else:
+                    logger.error(f"[InvokePrompt] Message[{msg_idx}] ⚠️ user_input exists in input_data but value is empty or None")
+            elif role == "user" and "user_input" not in input_data:
+                logger.error(f"[InvokePrompt] Message[{msg_idx}] ⚠️ user_input not found in input_data for user message. Available keys: {list(input_data.keys())}")
+            
+            # Check for any remaining unmatched placeholders
+            remaining_placeholders = re.findall(r'\{\{?(\w+)\}?\}', content_text)
+            if remaining_placeholders:
+                logger.debug(f"[InvokePrompt] Message[{msg_idx}] Remaining placeholders after replacement: {remaining_placeholders}")
+            
+            logger.debug(f"[InvokePrompt] Message[{msg_idx}] Original: {original_content[:200]}...")
+            logger.debug(f"[InvokePrompt] Message[{msg_idx}] Final: {content_text[:200]}...")
             
             messages.append({"role": role, "content": content_text})
         
-        # Clear chat history before generating reply
-        if self.agent:
-            _clear_agent_chat_messages(self.agent)
+        # Create fresh agent instance for this invocation to avoid state pollution
+        # This ensures each call is completely independent
+        logger.info(f"[InvokePrompt] Creating fresh agent instance for this invocation")
+        agent = self._create_prompt_agent()
         
         # Generate reply using AutoGen agent
         import asyncio
@@ -804,7 +1122,7 @@ class AutoGenTargetInvoker:
         try:
             response = await loop.run_in_executor(
                 None,
-                lambda: self.agent.generate_reply(messages=messages)
+                lambda: agent.generate_reply(messages=messages)
             )
         except Exception as e:
             error_msg = str(e)

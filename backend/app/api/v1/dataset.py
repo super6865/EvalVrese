@@ -122,7 +122,7 @@ class BatchItemGetRequest(BaseModel):
 
 # ========== Dataset CRUD ==========
 
-@router.post("/", response_model=DatasetResponse)
+@router.post("", response_model=DatasetResponse)
 @handle_api_errors
 async def create_dataset(data: DatasetCreate, db: Session = Depends(get_db)):
     """Create a new dataset"""

@@ -14,6 +14,7 @@ from app.services.observability_service import ObservabilityService
 from app.services.celery_log_service import CeleryLogService
 from app.models.experiment import ExperimentStatus, RetryMode, ExportStatus, CeleryTaskLog
 from app.tasks.experiment_tasks import execute_experiment_task, export_experiment_results_task
+from app.tasks.celery_app import celery_app
 from app.services.experiment_export_service import ExperimentExportService
 from app.services.experiment_comparison_service import ExperimentComparisonService
 from app.utils.api_decorators import handle_api_errors, handle_not_found
@@ -235,6 +236,11 @@ async def run_experiment(experiment_id: int, db: Session = Depends(get_db)):
     if not experiment:
         raise HTTPException(status_code=404, detail="Experiment not found")
     
+    # Reset experiment status to PENDING if it was stopped
+    # This allows re-running experiments that were previously stopped
+    if experiment.status == ExperimentStatus.STOPPED:
+        service.update_experiment_status(experiment_id, ExperimentStatus.PENDING)
+    
     # Create a new run
     run = service.create_run(experiment_id)
     
@@ -263,11 +269,22 @@ async def stop_experiment(experiment_id: int, db: Session = Depends(get_db)):
     # Update status to stopped
     service.update_experiment_status(experiment_id, ExperimentStatus.STOPPED)
     
-    # Also stop the latest run if it's running
+    # Also stop the latest run if it's running or pending and revoke Celery task
     if experiment.runs:
         latest_run = max(experiment.runs, key=lambda r: r.run_number)
-        if latest_run.status == ExperimentStatus.RUNNING:
+        # Stop run if it's RUNNING or PENDING (user might stop before execution starts)
+        if latest_run.status in [ExperimentStatus.RUNNING, ExperimentStatus.PENDING]:
             service.update_run_status(latest_run.id, ExperimentStatus.STOPPED)
+            
+            # Revoke the Celery task if task_id exists
+            if latest_run.task_id:
+                try:
+                    celery_app.control.revoke(latest_run.task_id, terminate=True)
+                except Exception as e:
+                    # Log error but don't fail the stop operation
+                    import logging
+                    logger = logging.getLogger(__name__)
+                    logger.warning(f"Failed to revoke Celery task {latest_run.task_id}: {str(e)}")
     
     return {"message": "Experiment stopped"}
 
@@ -406,11 +423,20 @@ async def retry_experiment(experiment_id: int, data: ExperimentRetry, db: Sessio
     except ValueError:
         retry_mode = RetryMode.RETRY_ALL
     
+    # Reset experiment status to PENDING if it was stopped
+    # This allows retrying experiments that were previously stopped
+    if experiment.status == ExperimentStatus.STOPPED:
+        service.update_experiment_status(experiment_id, ExperimentStatus.PENDING)
+    
     # Create new run
     run = service.retry_experiment(experiment_id, retry_mode, data.item_ids)
     
     # Start async task
     task = execute_experiment_task.delay(experiment_id, run.id)
+    
+    # Update run with task_id (same as run_experiment)
+    run.task_id = task.id
+    db.commit()
     
     return {
         "run_id": run.id,

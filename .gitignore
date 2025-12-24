@@ -117,4 +117,5 @@ openspec/
 AGENTS.md
 
 
-.tmp/
+# Temporary directories
+tmp/

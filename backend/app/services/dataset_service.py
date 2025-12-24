@@ -29,8 +29,11 @@ class DatasetService:
         features: Optional[Dict[str, Any]] = None
     ) -> Dataset:
         """Create a new dataset with schema support"""
-        # Check if name already exists
-        existing = self.db.query(Dataset).filter(Dataset.name == name).first()
+        # Check if name already exists (excluding deleted datasets)
+        existing = self.db.query(Dataset).filter(
+            Dataset.name == name,
+            Dataset.status != "Deleted"
+        ).first()
         if existing:
             raise ValueError("已存在对应数据集，请修改名称")
         
@@ -128,10 +131,11 @@ class DatasetService:
             return None
         
         if name is not None:
-            # Check if name is already used by another dataset
+            # Check if name is already used by another dataset (excluding deleted datasets)
             existing = self.db.query(Dataset).filter(
                 Dataset.name == name,
-                Dataset.id != dataset_id
+                Dataset.id != dataset_id,
+                Dataset.status != "Deleted"
             ).first()
             if existing:
                 raise ValueError("已存在对应数据集，请修改名称")

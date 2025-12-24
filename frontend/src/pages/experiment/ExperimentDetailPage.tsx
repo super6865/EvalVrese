@@ -38,13 +38,23 @@ export default function ExperimentDetailPage() {
     if (id) {
       loadExperiment()
       loadResults()
+      
       // 如果实验正在运行，轮询更新
+      // 停止轮询当实验状态为stopped、completed或failed时
+      if (experiment?.status === 'stopped' || experiment?.status === 'completed' || experiment?.status === 'failed') {
+        return
+      }
+      
       const interval = setInterval(() => {
         if (experiment?.status === 'running') {
           loadExperiment()
           loadResults()
+        } else {
+          // 如果状态不再是running，清除轮询
+          clearInterval(interval)
         }
       }, 3000)
+      
       return () => clearInterval(interval)
     }
   }, [id, experiment?.status])

@@ -1392,6 +1392,15 @@ class ExperimentService:
         if not run:
             raise ValueError(f"Run {run_id} not found")
         
+        # Check if experiment or run is already stopped before starting
+        if experiment.status == ExperimentStatus.STOPPED:
+            logger.info(f"[ExecuteExperiment] Experiment {experiment_id} is already stopped, aborting execution")
+            return
+        
+        if run.status == ExperimentStatus.STOPPED:
+            logger.info(f"[ExecuteExperiment] Run {run_id} is already stopped, aborting execution")
+            return
+        
         task_id = run.task_id or "unknown"
         
         # Update status to running and reset progress to 0
@@ -1420,6 +1429,15 @@ class ExperimentService:
                 self.update_experiment_status(experiment_id, ExperimentStatus.COMPLETED, progress=100)
                 return
             
+            # Check if experiment was stopped after loading dataset
+            experiment = self.get_experiment(experiment_id)
+            run = self.get_run(run_id)
+            if experiment.status == ExperimentStatus.STOPPED or (run and run.status == ExperimentStatus.STOPPED):
+                logger.info(f"[ExecuteExperiment] Experiment {experiment_id} or run {run_id} was stopped after loading dataset, aborting execution")
+                self.update_run_status(run_id, ExperimentStatus.STOPPED)
+                self.update_experiment_status(experiment_id, ExperimentStatus.STOPPED)
+                return
+            
             # Log first item content as example
             if items and len(items) > 0:
                 first_item = items[0]
@@ -1438,9 +1456,13 @@ class ExperimentService:
             
             # Process each item
             for idx, item in enumerate(items):
-                # Check if experiment was stopped
+                # Check if experiment or run was stopped
+                experiment = self.get_experiment(experiment_id)
                 run = self.get_run(run_id)
-                if run and run.status == ExperimentStatus.STOPPED:
+                if experiment.status == ExperimentStatus.STOPPED or (run and run.status == ExperimentStatus.STOPPED):
+                    logger.info(f"[ExecuteExperiment] Experiment {experiment_id} or run {run_id} was stopped during execution, stopping at item {idx + 1}/{total_items}")
+                    self.update_run_status(run_id, ExperimentStatus.STOPPED)
+                    self.update_experiment_status(experiment_id, ExperimentStatus.STOPPED)
                     break
                 
                 # Log processing item

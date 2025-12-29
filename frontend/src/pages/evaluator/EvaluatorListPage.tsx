@@ -29,7 +29,9 @@ export default function EvaluatorListPage() {
       message.success(`评估器 "${name}" 删除成功`)
       loadData()
     } catch (error: any) {
-      message.error('删除失败: ' + (error.message || '未知错误'))
+      // Extract error message from axios error response
+      const errorMessage = error.response?.data?.detail || error.message || '未知错误'
+      message.error(`删除失败: ${errorMessage}`)
     }
   }
 
@@ -72,25 +74,6 @@ export default function EvaluatorListPage() {
       key: 'description',
       ellipsis: true,
       render: (text: string) => text || '-',
-    },
-    {
-      title: '内置',
-      dataIndex: 'builtin',
-      key: 'builtin',
-      width: 80,
-      render: (builtin: boolean) => builtin ? <Tag color="purple">内置</Tag> : '-',
-    },
-    {
-      title: '类型',
-      dataIndex: 'box_type',
-      key: 'box_type',
-      width: 100,
-      render: (boxType: string) => {
-        if (!boxType) return '-'
-        return <Tag color={boxType === 'white' ? 'cyan' : 'default'}>
-          {boxType === 'white' ? '白盒' : '黑盒'}
-        </Tag>
-      },
     },
     {
       title: '更新时间',

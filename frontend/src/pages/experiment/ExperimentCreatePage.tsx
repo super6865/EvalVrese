@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useLocation } from 'react-router-dom'
 import { Form, Input, Button, Card, message, Space, Select, Steps, Spin, Table, Tag } from 'antd'
 import type { FormInstance } from 'antd/es/form'
 import { ArrowLeftOutlined } from '@ant-design/icons'
@@ -164,6 +164,7 @@ const STEPS = [
 
 export default function ExperimentCreatePage() {
   const navigate = useNavigate()
+  const location = useLocation()
   const [form] = Form.useForm()
   const [currentStep, setCurrentStep] = useState(0)
   const [loading, setLoading] = useState(false)
@@ -187,6 +188,90 @@ export default function ExperimentCreatePage() {
     loadModelSets()
     loadPrompts()
   }, [])
+
+  // Handle clone data - populate form after all data is loaded
+  useEffect(() => {
+    const cloneFrom = (location.state as any)?.cloneFrom
+    if (!cloneFrom) return
+
+    // Wait for all necessary data to be loaded
+    if (datasets.length === 0 || evaluators.length === 0 || modelSets.length === 0 || prompts.length === 0) return
+
+    const populateCloneData = async () => {
+      try {
+        // Generate new name
+        let newName = `${cloneFrom.name}_copy_1`
+        let counter = 1
+        while (true) {
+          const nameCheck = await experimentService.checkName(newName)
+          if (nameCheck.available) break
+          counter++
+          newName = `${cloneFrom.name}_copy_${counter}`
+        }
+
+        const formData: any = {
+          name: newName,
+          description: cloneFrom.description || '',
+          evaluator_version_ids: cloneFrom.evaluator_version_ids || [],
+        }
+
+        // Handle dataset_version_id - need to find dataset_id
+        if (cloneFrom.dataset_version_id) {
+          // Try to find dataset_id by checking all datasets' versions
+          let foundDatasetId: number | undefined
+          for (const dataset of datasets) {
+            try {
+              const versions = await datasetService.listVersions(dataset.id)
+              const version = versions.versions?.find((v: any) => v.id === cloneFrom.dataset_version_id)
+              if (version) {
+                foundDatasetId = dataset.id
+                formData.dataset_id = dataset.id
+                formData.dataset_version_id = cloneFrom.dataset_version_id
+                setSelectedDatasetId(dataset.id)
+                // Load dataset versions for the select
+                await loadDatasetVersions(dataset.id)
+                break
+              }
+            } catch (error) {
+              // Continue to next dataset
+            }
+          }
+        }
+
+        // Handle evaluation_target_config
+        if (cloneFrom.evaluation_target_config) {
+          const config = cloneFrom.evaluation_target_config
+          if (config.type === 'model_set') {
+            formData.target_type = 'model_set'
+            formData.model_set_id = config.model_set_id
+          } else if (config.type === 'prompt') {
+            formData.target_type = 'prompt'
+            formData.prompt_id = config.prompt_id
+            formData.prompt_version = config.prompt_version || 'draft'
+            formData.variable_mapping = config.variable_mapping || {}
+            formData.user_input_mapping = config.user_input_mapping
+            setSelectedPromptId(config.prompt_id)
+            // Load prompt versions and variables
+            await loadPromptVersions(config.prompt_id)
+            if (config.prompt_version && config.prompt_version !== 'draft') {
+              await loadPromptVariables(config.prompt_id, config.prompt_version)
+            } else {
+              await loadPromptVariables(config.prompt_id, 'draft')
+            }
+          }
+        }
+
+        // Set form values
+        form.setFieldsValue(formData)
+        setFormValues(formData)
+      } catch (error) {
+        console.error('Error populating clone data:', error)
+        message.error('回显克隆数据失败')
+      }
+    }
+
+    populateCloneData()
+  }, [datasets, evaluators, modelSets, prompts, location.state, form])
 
   useEffect(() => {
     if (selectedDatasetId) {

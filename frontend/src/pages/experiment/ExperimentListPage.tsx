@@ -35,7 +35,12 @@ export default function ExperimentListPage() {
     try {
       await experimentService.run(id)
       message.success('实验已启动')
+      // 立即刷新状态
       loadData()
+      // 短暂延迟后再次刷新，确保状态已更新
+      setTimeout(() => {
+        loadData()
+      }, 1000)
     } catch (error) {
       message.error('启动实验失败')
     }
@@ -45,7 +50,12 @@ export default function ExperimentListPage() {
     try {
       await experimentService.stop(id)
       message.success('实验已停止')
+      // 立即刷新状态
       loadData()
+      // 短暂延迟后再次刷新，确保状态已更新
+      setTimeout(() => {
+        loadData()
+      }, 1000)
     } catch (error) {
       message.error('停止实验失败')
     }
@@ -53,11 +63,12 @@ export default function ExperimentListPage() {
 
   const handleClone = async (id: number, loadData: () => void) => {
     try {
-      await experimentService.clone(id)
-      message.success('实验已克隆')
-      loadData()
+      // 获取完整的实验数据
+      const experiment = await experimentService.get(id)
+      // 跳转到创建页面，传递实验数据用于回显
+      navigate('/experiments/create', { state: { cloneFrom: experiment } })
     } catch (error) {
-      message.error('克隆实验失败')
+      message.error('获取实验数据失败')
     }
   }
 
@@ -65,9 +76,24 @@ export default function ExperimentListPage() {
     try {
       await experimentService.retry(id, 'retry_all')
       message.success('实验已重试')
+      // 立即刷新状态
       loadData()
+      // 短暂延迟后再次刷新，确保状态已更新
+      setTimeout(() => {
+        loadData()
+      }, 1000)
     } catch (error) {
       message.error('重试实验失败')
+    }
+  }
+
+  const handleDelete = async (id: number, name: string, loadData: () => void) => {
+    try {
+      await experimentService.delete(id)
+      message.success('实验已删除')
+      loadData()
+    } catch (error) {
+      message.error('删除实验失败')
     }
   }
 
@@ -204,14 +230,16 @@ export default function ExperimentListPage() {
             </Button>
           ) : (
             <>
-              <Button
-                type="link"
-                icon={<PlayCircleOutlined />}
-                onClick={() => handleRun(record.id, loadData)}
-              >
-                运行
-              </Button>
-              {record.status !== 'pending' && (
+              {(record.status === 'stopped' || record.status === 'pending') && (
+                <Button
+                  type="link"
+                  icon={<PlayCircleOutlined />}
+                  onClick={() => handleRun(record.id, loadData)}
+                >
+                  运行
+                </Button>
+              )}
+              {record.status === 'failed' && (
                 <Button
                   type="link"
                   icon={<RedoOutlined />}
@@ -235,6 +263,22 @@ export default function ExperimentListPage() {
           >
             查看
           </Button>
+          <Popconfirm
+            title="确认删除"
+            description={`确定要删除实验 "${record.name}" 吗？此操作不可恢复。`}
+            onConfirm={() => handleDelete(record.id, record.name, loadData)}
+            okText="删除"
+            okType="danger"
+            cancelText="取消"
+          >
+            <Button
+              type="link"
+              danger
+              icon={<DeleteOutlined />}
+            >
+              删除
+            </Button>
+          </Popconfirm>
         </Space>
       )}
       batchActions={(keys, loadData) => (

@@ -1,38 +1,36 @@
 import { useState, useEffect } from 'react'
 import { Form, Input, Button, Card, message, Descriptions, Tag } from 'antd'
 import { evaluatorService } from '../../../services/evaluatorService'
-import type { EvaluatorType, EvaluatorInputData, EvaluatorOutputData, EvaluatorVersion } from '../../../types/evaluator'
+import type { EvaluatorType, EvaluatorInputData, EvaluatorOutputData, Evaluator } from '../../../types/evaluator'
 
 const { TextArea } = Input
 
 interface EvaluatorDebugPanelProps {
   evaluatorId: number
-  versionId: number
   evaluatorType: EvaluatorType
 }
 
 export default function EvaluatorDebugPanel({
   evaluatorId,
-  versionId,
   evaluatorType,
 }: EvaluatorDebugPanelProps) {
   const [form] = Form.useForm()
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<EvaluatorOutputData | null>(null)
-  const [version, setVersion] = useState<EvaluatorVersion | null>(null)
-  const [loadingVersion, setLoadingVersion] = useState(false)
+  const [evaluator, setEvaluator] = useState<Evaluator | null>(null)
+  const [loadingEvaluator, setLoadingEvaluator] = useState(false)
 
-  // 加载评估器版本信息
+  // 加载评估器信息
   useEffect(() => {
-    const loadVersion = async () => {
-      setLoadingVersion(true)
+    const loadEvaluator = async () => {
+      setLoadingEvaluator(true)
       try {
-        const versionData = await evaluatorService.getVersion(versionId)
-        setVersion(versionData)
+        const evaluatorData = await evaluatorService.get(evaluatorId)
+        setEvaluator(evaluatorData)
         
-        // 根据版本信息生成初始输入值
-        if (versionData.prompt_content && evaluatorType === 'prompt') {
-          const promptContent = versionData.prompt_content
+        // 根据评估器信息生成初始输入值
+        if (evaluatorData.prompt_content && evaluatorType === 'prompt') {
+          const promptContent = evaluatorData.prompt_content
           const messageList = promptContent.message_list || []
           
           // 从 message_list 中提取变量，生成示例输入
@@ -186,7 +184,7 @@ export default function EvaluatorDebugPanel({
           })
         }
       } catch (error) {
-        // Failed to load version info
+        // Failed to load evaluator info
         // 即使加载失败，也设置默认值
         form.setFieldsValue({
           input_fields: JSON.stringify({
@@ -218,15 +216,15 @@ export default function EvaluatorDebugPanel({
           ], null, 2)
         })
       } finally {
-        setLoadingVersion(false)
+        setLoadingEvaluator(false)
       }
     }
     
-    if (versionId) {
-      loadVersion()
+    if (evaluatorId) {
+      loadEvaluator()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [versionId, evaluatorType])
+  }, [evaluatorId, evaluatorType])
 
   // 解析包含 Unicode 转义序列的字符串
   const parseUnicodeString = (str: string | undefined | null): string => {
@@ -281,7 +279,7 @@ export default function EvaluatorDebugPanel({
         history_messages: values.history_messages ? JSON.parse(values.history_messages) : undefined,
       }
 
-      const response = await evaluatorService.debug(versionId, {
+      const response = await evaluatorService.debugByEvaluatorId(evaluatorId, {
         input_data: inputData,
       })
       setResult(response)
@@ -295,7 +293,7 @@ export default function EvaluatorDebugPanel({
 
   return (
     <div className="space-y-4">
-      <Card title="调试评估器" loading={loadingVersion}>
+      <Card title="调试评估器" loading={loadingEvaluator}>
         <Form form={form} layout="vertical" onFinish={handleDebug}>
           <Form.Item
             name="input_fields"

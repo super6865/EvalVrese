@@ -60,6 +60,14 @@ class EvaluatorUpdate(BaseModel):
     tags: Optional[Dict[str, Any]] = None
 
 
+class EvaluatorContentUpdate(BaseModel):
+    """Update evaluator content"""
+    prompt_content: Optional[Dict[str, Any]] = None
+    code_content: Optional[Dict[str, Any]] = None
+    input_schemas: Optional[List[Dict[str, Any]]] = None
+    output_schemas: Optional[List[Dict[str, Any]]] = None
+
+
 class VersionCreate(BaseModel):
     version: str
     content: Optional[Dict[str, Any]] = None  # Legacy field
@@ -172,6 +180,24 @@ async def delete_evaluator(evaluator_id: int, db: Session = Depends(get_db)):
     if not success:
         raise HTTPException(status_code=404, detail="Evaluator not found")
     return {"message": "Evaluator deleted successfully"}
+
+
+@router.put("/{evaluator_id}/content")
+@handle_api_errors
+@handle_not_found("Evaluator not found")
+async def update_evaluator_content(evaluator_id: int, data: EvaluatorContentUpdate, db: Session = Depends(get_db)):
+    """Update evaluator content directly"""
+    service = EvaluatorService(db)
+    evaluator = service.update_evaluator_content(
+        evaluator_id=evaluator_id,
+        prompt_content=data.prompt_content,
+        code_content=data.code_content,
+        input_schemas=data.input_schemas,
+        output_schemas=data.output_schemas,
+    )
+    if not evaluator:
+        raise HTTPException(status_code=404, detail="Evaluator not found")
+    return evaluator
 
 
 # Version management
@@ -290,6 +316,79 @@ async def debug_evaluator(version_id: int, data: DebugRequest, db: Session = Dep
         
         result = await service.debug_evaluator(
             version_id=version_id,
+            input_data=input_data,
+        )
+        return result.dict() if hasattr(result, 'dict') else result
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Evaluation error: {str(e)}")
+
+
+# Run evaluator by ID (new endpoint, no version needed)
+@router.post("/{evaluator_id}/run")
+async def run_evaluator_by_id(evaluator_id: int, data: RunEvaluatorRequest, db: Session = Depends(get_db)):
+    """Run an evaluator by evaluator ID (resolves to current version internally)"""
+    service = EvaluatorService(db)
+    record_service = EvaluatorRecordService(db)
+    
+    try:
+        # Convert input data
+        input_data = EvaluatorInputData(**data.input_data)
+        
+        # Run evaluator by ID
+        output_data = await service.run_evaluator_by_id(
+            evaluator_id=evaluator_id,
+            input_data=input_data,
+            experiment_id=data.experiment_id,
+            experiment_run_id=data.experiment_run_id,
+            dataset_item_id=data.dataset_item_id,
+            turn_id=data.turn_id,
+            disable_tracing=data.disable_tracing,
+        )
+        
+        # Get current version ID for record creation
+        version_id = service.get_current_version_id(evaluator_id)
+        if version_id:
+            # Create record
+            from app.models.evaluator_record import EvaluatorRunStatus
+            status = EvaluatorRunStatus.SUCCESS if output_data.evaluator_result else EvaluatorRunStatus.FAIL
+            record = record_service.create_record(
+                evaluator_version_id=version_id,
+                input_data=data.input_data,
+                output_data=output_data.dict() if hasattr(output_data, 'dict') else output_data,
+                status=status,
+                experiment_id=data.experiment_id,
+                experiment_run_id=data.experiment_run_id,
+                dataset_item_id=data.dataset_item_id,
+                turn_id=data.turn_id,
+            )
+            return {
+                "record_id": record.id,
+                "output_data": output_data.dict() if hasattr(output_data, 'dict') else output_data,
+            }
+        else:
+            return {
+                "record_id": None,
+                "output_data": output_data.dict() if hasattr(output_data, 'dict') else output_data,
+            }
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Evaluation error: {str(e)}")
+
+
+# Debug evaluator by ID (new endpoint, no version needed)
+@router.post("/{evaluator_id}/debug")
+async def debug_evaluator_by_id(evaluator_id: int, data: DebugRequest, db: Session = Depends(get_db)):
+    """Debug/test an evaluator by evaluator ID"""
+    service = EvaluatorService(db)
+    try:
+        # Convert input data
+        input_data = EvaluatorInputData(**data.input_data)
+        
+        result = await service.debug_evaluator_by_id(
+            evaluator_id=evaluator_id,
             input_data=input_data,
         )
         return result.dict() if hasattr(result, 'dict') else result

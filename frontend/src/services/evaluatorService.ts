@@ -63,9 +63,24 @@ export const evaluatorService = {
     return response.data
   },
 
-  delete: async (id: number) => {
-    const response = await api.delete(`/evaluators/${id}`)
+  updateContent: async (id: number, data: {
+    prompt_content?: PromptEvaluatorContent
+    code_content?: CodeEvaluatorContent
+    input_schemas?: ArgsSchema[]
+    output_schemas?: ArgsSchema[]
+  }): Promise<Evaluator> => {
+    const response = await api.put(`/evaluators/${id}/content`, data)
     return response.data
+  },
+
+  delete: async (id: number) => {
+    try {
+      const response = await api.delete(`/evaluators/${id}`)
+      return response.data
+    } catch (error: any) {
+      const errorMessage = error.response?.data?.detail || error.response?.data?.message || error.message || '删除失败'
+      throw new Error(errorMessage)
+    }
   },
 
   listVersions: async (evaluatorId: number) => {
@@ -115,6 +130,26 @@ export const evaluatorService = {
     input_data: EvaluatorInputData
   }): Promise<EvaluatorOutputData> => {
     const response = await api.post(`/evaluators/versions/${versionId}/debug`, data)
+    return response.data
+  },
+
+  // New methods using evaluator ID (no version needed)
+  runByEvaluatorId: async (evaluatorId: number, data: {
+    input_data: EvaluatorInputData
+    experiment_id?: number
+    experiment_run_id?: number
+    dataset_item_id?: number
+    turn_id?: number
+    disable_tracing?: boolean
+  }): Promise<{ record_id: number | null; output_data: EvaluatorOutputData }> => {
+    const response = await api.post(`/evaluators/${evaluatorId}/run`, data)
+    return response.data
+  },
+
+  debugByEvaluatorId: async (evaluatorId: number, data: {
+    input_data: EvaluatorInputData
+  }): Promise<EvaluatorOutputData> => {
+    const response = await api.post(`/evaluators/${evaluatorId}/debug`, data)
     return response.data
   },
 

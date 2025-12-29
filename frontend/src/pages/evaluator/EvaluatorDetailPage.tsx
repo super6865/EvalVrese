@@ -1,12 +1,11 @@
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { Card, Descriptions, Tag, Button, Space, Tabs, message, Spin } from 'antd'
-import { ArrowLeftOutlined, ReloadOutlined, PlayCircleOutlined } from '@ant-design/icons'
+import { Card, Descriptions, Tag, Button, Space, message, Spin, Tabs } from 'antd'
+import { ArrowLeftOutlined, ReloadOutlined } from '@ant-design/icons'
 import { evaluatorService } from '../../services/evaluatorService'
-import type { Evaluator, EvaluatorVersion, EvaluatorVersionStatus } from '../../types/evaluator'
+import type { Evaluator } from '../../types/evaluator'
 import EvaluatorDebugPanel from './components/EvaluatorDebugPanel'
-import VersionManagement from './components/VersionManagement'
-import dayjs from 'dayjs'
+import EvaluatorContentPanel from './components/EvaluatorContentPanel'
 import './EvaluatorDetailPage.css'
 
 const { TabPane } = Tabs
@@ -15,14 +14,11 @@ export default function EvaluatorDetailPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const [evaluator, setEvaluator] = useState<Evaluator | null>(null)
-  const [versions, setVersions] = useState<EvaluatorVersion[]>([])
   const [loading, setLoading] = useState(false)
-  const [activeTab, setActiveTab] = useState('versions')
 
   useEffect(() => {
     if (id) {
       loadEvaluator()
-      loadVersions()
     }
   }, [id])
 
@@ -36,16 +32,6 @@ export default function EvaluatorDetailPage() {
       message.error('加载评估器失败')
     } finally {
       setLoading(false)
-    }
-  }
-
-  const loadVersions = async () => {
-    if (!id) return
-    try {
-      const response = await evaluatorService.listVersions(Number(id))
-      setVersions(response.versions || [])
-    } catch (error) {
-      message.error('加载版本失败')
     }
   }
 
@@ -102,9 +88,6 @@ export default function EvaluatorDetailPage() {
               </Tag>
             </Descriptions.Item>
           )}
-          <Descriptions.Item label="最新版本">
-            {evaluator.latest_version || '-'}
-          </Descriptions.Item>
           <Descriptions.Item label="描述" span={2}>
             {evaluator.description || '-'}
           </Descriptions.Item>
@@ -130,8 +113,7 @@ export default function EvaluatorDetailPage() {
         }}
       >
         <Tabs 
-          activeKey={activeTab} 
-          onChange={setActiveTab}
+          defaultActiveKey="content"
           className="evaluator-detail-tabs"
           style={{ 
             display: 'flex', 
@@ -143,26 +125,20 @@ export default function EvaluatorDetailPage() {
           }}
           tabBarStyle={{ margin: 0, padding: '0 24px', flexShrink: 0 }}
         >
-          <TabPane tab="版本" key="versions">
+          <TabPane tab="内容" key="content">
             <div style={{ padding: '24px', maxHeight: 'calc(100vh - 400px)', overflowY: 'auto' }}>
-              <VersionManagement 
-                evaluatorId={evaluator.id} 
-                evaluatorType={evaluator.evaluator_type}
-                onVersionChange={loadVersions} 
+              <EvaluatorContentPanel
+                evaluator={evaluator}
+                onUpdate={loadEvaluator}
               />
             </div>
           </TabPane>
           <TabPane tab="调试" key="debug">
             <div style={{ padding: '24px', maxHeight: 'calc(100vh - 400px)', overflowY: 'auto' }}>
-              {versions.length > 0 ? (
-                <EvaluatorDebugPanel
-                  evaluatorId={evaluator.id}
-                  versionId={versions[0].id}
-                  evaluatorType={evaluator.evaluator_type}
-                />
-              ) : (
-                <div className="text-center text-gray-500 py-8">暂无版本，请先创建版本</div>
-              )}
+              <EvaluatorDebugPanel
+                evaluatorId={evaluator.id}
+                evaluatorType={evaluator.evaluator_type}
+              />
             </div>
           </TabPane>
         </Tabs>

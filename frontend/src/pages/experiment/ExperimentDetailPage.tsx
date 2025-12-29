@@ -87,7 +87,12 @@ export default function ExperimentDetailPage() {
     try {
       await experimentService.run(Number(id))
       message.success('实验已启动')
+      // 立即刷新状态
       loadExperiment()
+      // 短暂延迟后再次刷新，确保状态已更新
+      setTimeout(() => {
+        loadExperiment()
+      }, 1000)
     } catch (error) {
       message.error('启动实验失败')
     }
@@ -98,7 +103,12 @@ export default function ExperimentDetailPage() {
     try {
       await experimentService.stop(Number(id))
       message.success('实验已停止')
+      // 立即刷新状态
       loadExperiment()
+      // 短暂延迟后再次刷新，确保状态已更新
+      setTimeout(() => {
+        loadExperiment()
+      }, 1000)
     } catch (error) {
       message.error('停止实验失败')
     }
@@ -109,21 +119,21 @@ export default function ExperimentDetailPage() {
     try {
       await experimentService.retry(Number(id), 'retry_all')
       message.success('实验已重试')
+      // 立即刷新状态
       loadExperiment()
+      // 短暂延迟后再次刷新，确保状态已更新
+      setTimeout(() => {
+        loadExperiment()
+      }, 1000)
     } catch (error) {
       message.error('重试实验失败')
     }
   }
 
-  const handleClone = async () => {
-    if (!id) return
-    try {
-      const cloned = await experimentService.clone(Number(id))
-      message.success('实验已克隆')
-      navigate(`/experiments/${cloned.id}`)
-    } catch (error) {
-      message.error('克隆实验失败')
-    }
+  const handleClone = () => {
+    if (!experiment) return
+    // 跳转到创建页面，传递实验数据用于回显
+    navigate('/experiments/create', { state: { cloneFrom: experiment } })
   }
 
   const handleDelete = () => {
@@ -372,14 +382,16 @@ export default function ExperimentDetailPage() {
               </Button>
             ) : (
               <>
-              <Button
-                type="primary"
-                icon={<PlayCircleOutlined />}
-                onClick={handleRun}
-              >
-                运行
-              </Button>
-                {experiment.status !== 'pending' && (
+              {(experiment.status === 'stopped' || experiment.status === 'pending') && (
+                <Button
+                  type="primary"
+                  icon={<PlayCircleOutlined />}
+                  onClick={handleRun}
+                >
+                  运行
+                </Button>
+              )}
+                {experiment.status === 'failed' && (
                   <Button icon={<RedoOutlined />} onClick={handleRetry}>
                     重试
                   </Button>

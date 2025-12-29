@@ -33,6 +33,11 @@ export interface Evaluator {
   box_type?: EvaluatorBoxType
   evaluator_info?: EvaluatorInfo
   tags?: EvaluatorTags
+  // Content fields (directly stored in evaluator)
+  prompt_content?: PromptEvaluatorContent
+  code_content?: CodeEvaluatorContent
+  input_schemas?: ArgsSchema[]
+  output_schemas?: ArgsSchema[]
   created_at?: string
   updated_at?: string
   created_by?: string

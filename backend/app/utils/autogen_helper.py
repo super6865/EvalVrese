@@ -158,6 +158,13 @@ def create_autogen_config_from_model_config(model_config_dict: Dict[str, Any]) -
     
     autogen_config["timeout"] = timeout
     
+    # Add extra_body to disable thinking mode for all models by default
+    # This prevents models like kimi-k2-thinking from using deep thinking mode
+    autogen_config["extra_body"] = {
+        "enable_thinking": False,
+        "thinking_depth": 0,
+    }
+    
     llm_config = {
         "config_list": [autogen_config],
         "timeout": timeout,

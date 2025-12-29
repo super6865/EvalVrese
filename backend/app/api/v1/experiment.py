@@ -423,10 +423,12 @@ async def retry_experiment(experiment_id: int, data: ExperimentRetry, db: Sessio
     except ValueError:
         retry_mode = RetryMode.RETRY_ALL
     
-    # Reset experiment status to PENDING if it was stopped
-    # This allows retrying experiments that were previously stopped
-    if experiment.status == ExperimentStatus.STOPPED:
-        service.update_experiment_status(experiment_id, ExperimentStatus.PENDING)
+    # Only allow retrying failed experiments
+    if experiment.status != ExperimentStatus.FAILED:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot retry experiment with status '{experiment.status}'. Only failed experiments can be retried."
+        )
     
     # Create new run
     run = service.retry_experiment(experiment_id, retry_mode, data.item_ids)

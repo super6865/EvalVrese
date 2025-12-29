@@ -39,6 +39,12 @@ class Evaluator(Base):
     evaluator_info = Column(JSON, nullable=True)  # benchmark, vendor, vendor_url, user_manual_url
     tags = Column(JSON, nullable=True)  # 标签系统，格式: {"zh-CN": {"Category": [...], ...}, "en-US": {...}}
     
+    # Content fields (directly stored in evaluator, synced with versions for backward compatibility)
+    prompt_content = Column(JSON, nullable=True)  # For Prompt evaluators: message_list, model_config, etc.
+    code_content = Column(JSON, nullable=True)  # For Code evaluators: code_content, language_type, etc.
+    input_schemas = Column(JSON, nullable=True)  # 输入 Schema 定义
+    output_schemas = Column(JSON, nullable=True)  # 输出 Schema 定义
+    
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     created_by = Column(String(100), nullable=True)

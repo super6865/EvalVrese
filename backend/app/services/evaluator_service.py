@@ -16,6 +16,7 @@ from app.domain.entity.evaluator_entity import (
     EvaluatorResult,
 )
 from app.models.evaluator_record import EvaluatorRunStatus
+from app.models.experiment import Experiment, ExperimentResult, ExperimentAggregateResult
 from app.domain.entity.evaluator_types import LanguageType, ParseType
 from app.services.prompt_evaluator_service import PromptEvaluatorService
 from app.utils.code_builder import CodeBuilder
@@ -110,7 +111,7 @@ class EvaluatorService:
                 else:
                     code_content = dict(code_evaluator)
         
-        # Create evaluator
+        # Create evaluator with content directly stored
         evaluator = Evaluator(
             name=name,
             description=description,
@@ -121,11 +122,16 @@ class EvaluatorService:
             tags=tags,
             created_by=created_by,
             latest_version=version_number,
+            # Store content directly in evaluator
+            prompt_content=prompt_content,
+            code_content=code_content,
+            input_schemas=current_version.input_schemas if current_version else None,
+            output_schemas=current_version.output_schemas if current_version else None,
         )
         self.db.add(evaluator)
         self.db.flush()  # Get evaluator ID without committing
         
-        # Create first version (submitted version)
+        # Create first version (submitted version) for backward compatibility with experiments
         submitted_version = EvaluatorVersion(
             evaluator_id=evaluator.id,
             version=version_number,
@@ -146,7 +152,24 @@ class EvaluatorService:
         return evaluator
 
     def get_evaluator(self, evaluator_id: int) -> Optional[Evaluator]:
-        return self.db.query(Evaluator).filter(Evaluator.id == evaluator_id).first()
+        """Get evaluator by ID, sync content from version if needed"""
+        evaluator = self.db.query(Evaluator).filter(Evaluator.id == evaluator_id).first()
+        if not evaluator:
+            return None
+        
+        # If evaluator doesn't have content, sync from current version (for backward compatibility)
+        if not evaluator.prompt_content and not evaluator.code_content:
+            current_version = self.get_current_version(evaluator_id)
+            if current_version:
+                evaluator.prompt_content = current_version.prompt_content
+                evaluator.code_content = current_version.code_content
+                evaluator.input_schemas = current_version.input_schemas
+                evaluator.output_schemas = current_version.output_schemas
+                # Save synced content back to evaluator
+                self.db.commit()
+                self.db.refresh(evaluator)
+        
+        return evaluator
 
     def list_evaluators(self, skip: int = 0, limit: int = 100, name: Optional[str] = None) -> Tuple[List[Evaluator], int]:
         query = self.db.query(Evaluator)
@@ -155,6 +178,20 @@ class EvaluatorService:
             query = query.filter(Evaluator.name.ilike(f"%{name}%"))
         total = query.count()
         evaluators = query.offset(skip).limit(limit).all()
+        
+        # Sync content from versions for evaluators that don't have content yet
+        for evaluator in evaluators:
+            if not evaluator.prompt_content and not evaluator.code_content:
+                current_version = self.get_current_version(evaluator.id)
+                if current_version:
+                    evaluator.prompt_content = current_version.prompt_content
+                    evaluator.code_content = current_version.code_content
+                    evaluator.input_schemas = current_version.input_schemas
+                    evaluator.output_schemas = current_version.output_schemas
+                    # Save synced content back to evaluator
+                    self.db.commit()
+                    self.db.refresh(evaluator)
+        
         return evaluators, total
 
     def update_evaluator(
@@ -176,12 +213,133 @@ class EvaluatorService:
         self.db.commit()
         self.db.refresh(evaluator)
         return evaluator
+    
+    def update_evaluator_content(
+        self,
+        evaluator_id: int,
+        prompt_content: Optional[Dict[str, Any]] = None,
+        code_content: Optional[Dict[str, Any]] = None,
+        input_schemas: Optional[List[Dict[str, Any]]] = None,
+        output_schemas: Optional[List[Dict[str, Any]]] = None,
+    ) -> Optional[Evaluator]:
+        """Update evaluator content and sync to current version"""
+        evaluator = self.get_evaluator(evaluator_id)
+        if not evaluator:
+            return None
+        
+        # Update evaluator content
+        if prompt_content is not None:
+            evaluator.prompt_content = prompt_content
+        if code_content is not None:
+            evaluator.code_content = code_content
+        if input_schemas is not None:
+            evaluator.input_schemas = input_schemas
+        if output_schemas is not None:
+            evaluator.output_schemas = output_schemas
+        
+        evaluator.updated_at = datetime.utcnow()
+        
+        # Sync to current version for backward compatibility
+        current_version = self.get_current_version(evaluator_id)
+        if current_version:
+            if prompt_content is not None:
+                current_version.prompt_content = prompt_content
+            if code_content is not None:
+                current_version.code_content = code_content
+            if input_schemas is not None:
+                current_version.input_schemas = input_schemas
+            if output_schemas is not None:
+                current_version.output_schemas = output_schemas
+            current_version.updated_at = datetime.utcnow()
+        else:
+            # Create a new version if none exists
+            version_number = evaluator.latest_version or "v1.0"
+            new_version = EvaluatorVersion(
+                evaluator_id=evaluator_id,
+                version=version_number,
+                status=EvaluatorVersionStatus.SUBMITTED.value,
+                prompt_content=evaluator.prompt_content,
+                code_content=evaluator.code_content,
+                input_schemas=evaluator.input_schemas,
+                output_schemas=evaluator.output_schemas,
+            )
+            self.db.add(new_version)
+        
+        self.db.commit()
+        self.db.refresh(evaluator)
+        return evaluator
+    
+    def get_current_version(self, evaluator_id: int) -> Optional[EvaluatorVersion]:
+        """Get the current (submitted) version of an evaluator"""
+        evaluator = self.db.query(Evaluator).filter(Evaluator.id == evaluator_id).first()
+        if not evaluator:
+            return None
+        
+        # Try to get submitted version first
+        version = self.db.query(EvaluatorVersion).filter(
+            EvaluatorVersion.evaluator_id == evaluator_id,
+            EvaluatorVersion.status == EvaluatorVersionStatus.SUBMITTED.value
+        ).order_by(EvaluatorVersion.created_at.desc()).first()
+        
+        # If no submitted version, get the latest version
+        if not version:
+            version = self.db.query(EvaluatorVersion).filter(
+                EvaluatorVersion.evaluator_id == evaluator_id
+            ).order_by(EvaluatorVersion.created_at.desc()).first()
+        
+        return version
+    
+    def get_current_version_id(self, evaluator_id: int) -> Optional[int]:
+        """Get the current version ID for an evaluator (for backward compatibility with experiments)"""
+        version = self.get_current_version(evaluator_id)
+        return version.id if version else None
 
     def delete_evaluator(self, evaluator_id: int) -> bool:
         evaluator = self.get_evaluator(evaluator_id)
         if not evaluator:
             return False
         
+        # Get all versions of this evaluator
+        versions = self.list_versions(evaluator_id)
+        if not versions:
+            # No versions, safe to delete
+            self.db.delete(evaluator)
+            self.db.commit()
+            return True
+        
+        # Collect all version IDs
+        version_ids = [v.id for v in versions]
+        
+        # Check for references in experiment_aggregate_results
+        aggregate_refs = self.db.query(ExperimentAggregateResult).filter(
+            ExperimentAggregateResult.evaluator_version_id.in_(version_ids)
+        ).all()
+        
+        # Check for references in experiment_results
+        result_refs = self.db.query(ExperimentResult).filter(
+            ExperimentResult.evaluator_version_id.in_(version_ids)
+        ).all()
+        
+        # Collect unique experiment IDs from both sources
+        experiment_ids = set()
+        if aggregate_refs:
+            experiment_ids.update([ref.experiment_id for ref in aggregate_refs])
+        if result_refs:
+            experiment_ids.update([ref.experiment_id for ref in result_refs])
+        
+        # If there are references, get experiment details and raise error
+        if experiment_ids:
+            experiments = self.db.query(Experiment).filter(
+                Experiment.id.in_(list(experiment_ids))
+            ).all()
+            experiment_names = [f"{exp.name} (ID: {exp.id})" for exp in experiments]
+            experiment_list = "、".join(experiment_names)
+            raise ValueError(
+                f"无法删除评估器：该评估器的版本被以下实验引用：{experiment_list}。"
+                f"请先删除或修改这些实验后再尝试删除评估器。"
+            )
+        
+        # No references found, safe to delete
         self.db.delete(evaluator)
         self.db.commit()
         return True
@@ -343,12 +501,32 @@ class EvaluatorService:
         trace_id = None if disable_tracing else str(uuid.uuid4())
         
         # Execute based on evaluator type
-        if evaluator.evaluator_type == EvaluatorType.PROMPT:
-            output_data = await self._run_prompt_evaluator(version, input_data)
-        elif evaluator.evaluator_type == EvaluatorType.CODE:
-            output_data = await self._run_code_evaluator(version, input_data)
+        # Use evaluator's direct content if available, otherwise fall back to version
+        input_schemas = evaluator.input_schemas or version.input_schemas
+        if evaluator.prompt_content or evaluator.code_content:
+            # Use content directly from evaluator
+            if evaluator.evaluator_type == EvaluatorType.PROMPT:
+                output_data = await self._run_prompt_evaluator_from_content(
+                    evaluator.prompt_content or {},
+                    input_data,
+                    input_schemas,
+                )
+            elif evaluator.evaluator_type == EvaluatorType.CODE:
+                output_data = await self._run_code_evaluator_from_content(
+                    evaluator.code_content or {},
+                    input_data,
+                    input_schemas,
+                )
+            else:
+                raise ValueError(f"Unknown evaluator type: {evaluator.evaluator_type}")
         else:
-            raise ValueError(f"Unknown evaluator type: {evaluator.evaluator_type}")
+            # Fall back to version-based execution
+            if evaluator.evaluator_type == EvaluatorType.PROMPT:
+                output_data = await self._run_prompt_evaluator(version, input_data)
+            elif evaluator.evaluator_type == EvaluatorType.CODE:
+                output_data = await self._run_code_evaluator(version, input_data)
+            else:
+                raise ValueError(f"Unknown evaluator type: {evaluator.evaluator_type}")
         
         return output_data
     
@@ -432,6 +610,58 @@ class EvaluatorService:
     ) -> EvaluatorOutputData:
         """调试评估器"""
         return await self.run_evaluator(version_id, input_data, disable_tracing=True)
+    
+    async def run_evaluator_by_id(
+        self,
+        evaluator_id: int,
+        input_data: EvaluatorInputData,
+        experiment_id: Optional[int] = None,
+        experiment_run_id: Optional[int] = None,
+        dataset_item_id: Optional[int] = None,
+        turn_id: Optional[int] = None,
+        disable_tracing: bool = False,
+    ) -> EvaluatorOutputData:
+        """Run evaluator by evaluator ID (resolves to current version internally)"""
+        evaluator = self.get_evaluator(evaluator_id)
+        if not evaluator:
+            raise ValueError(f"Evaluator {evaluator_id} not found")
+        
+        # Get or create current version for backward compatibility
+        current_version = self.get_current_version(evaluator_id)
+        if not current_version:
+            # Create a version from evaluator content
+            version_number = evaluator.latest_version or "v1.0"
+            current_version = EvaluatorVersion(
+                evaluator_id=evaluator_id,
+                version=version_number,
+                status=EvaluatorVersionStatus.SUBMITTED.value,
+                prompt_content=evaluator.prompt_content,
+                code_content=evaluator.code_content,
+                input_schemas=evaluator.input_schemas,
+                output_schemas=evaluator.output_schemas,
+            )
+            self.db.add(current_version)
+            self.db.commit()
+            self.db.refresh(current_version)
+        
+        # Use the version-based run method
+        return await self.run_evaluator(
+            current_version.id,
+            input_data,
+            experiment_id=experiment_id,
+            experiment_run_id=experiment_run_id,
+            dataset_item_id=dataset_item_id,
+            turn_id=turn_id,
+            disable_tracing=disable_tracing,
+        )
+    
+    async def debug_evaluator_by_id(
+        self,
+        evaluator_id: int,
+        input_data: EvaluatorInputData,
+    ) -> EvaluatorOutputData:
+        """Debug evaluator by evaluator ID"""
+        return await self.run_evaluator_by_id(evaluator_id, input_data, disable_tracing=True)
 
     async def batch_debug_evaluator(
         self,
@@ -556,5 +786,110 @@ class EvaluatorService:
             parse_type=parse_type,
             prompt_suffix=prompt_suffix,
             tools=tools,
+        )
+    
+    async def _run_prompt_evaluator_from_content(
+        self,
+        prompt_content: Dict[str, Any],
+        input_data: EvaluatorInputData,
+        input_schemas: Optional[List[Dict[str, Any]]] = None,
+    ) -> EvaluatorOutputData:
+        """Run prompt evaluator from content dict"""
+        message_list = prompt_content.get("message_list", [])
+        model_config = prompt_content.get("model_config", {})
+        parse_type = ParseType(prompt_content.get("parse_type", "text"))
+        prompt_suffix = prompt_content.get("prompt_suffix", "")
+        tools = prompt_content.get("tools", [])
+        
+        # Validate input if schemas provided
+        if input_schemas:
+            input_dict = input_data.dict() if hasattr(input_data, 'dict') else input_data
+            is_valid, error = self.schema_validator.validate_evaluator_input(
+                input_dict.get("input_fields", {}),
+                input_schemas,
+            )
+            if not is_valid:
+                from app.domain.entity.evaluator_entity import EvaluatorRunError
+                return EvaluatorOutputData(
+                    evaluator_run_error=EvaluatorRunError(
+                        code=400,
+                        message=f"Input validation failed: {error}",
+                    )
+                )
+        
+        return await self.prompt_service.run(
+            message_list=message_list,
+            model_config=model_config,
+            input_data=input_data,
+            parse_type=parse_type,
+            prompt_suffix=prompt_suffix,
+            tools=tools,
+        )
+    
+    async def _run_code_evaluator_from_content(
+        self,
+        code_content: Dict[str, Any],
+        input_data: EvaluatorInputData,
+        input_schemas: Optional[List[Dict[str, Any]]] = None,
+    ) -> EvaluatorOutputData:
+        """Run code evaluator from content dict"""
+        code = code_content.get("code_content", "")
+        language_type = LanguageType(code_content.get("language_type", "Python"))
+        
+        # Validate input if schemas provided
+        if input_schemas:
+            input_dict = input_data.dict() if hasattr(input_data, 'dict') else input_data
+            is_valid, error = self.schema_validator.validate_evaluator_input(
+                input_dict.get("input_fields", {}),
+                input_schemas,
+            )
+            if not is_valid:
+                from app.domain.entity.evaluator_entity import EvaluatorRunError
+                return EvaluatorOutputData(
+                    evaluator_run_error=EvaluatorRunError(
+                        code=400,
+                        message=f"Input validation failed: {error}",
+                    )
+                )
+        
+        # Build code
+        built_code = self.code_builder.build_code(input_data, code, language_type)
+        
+        # Get runtime
+        runtime = self.runtime_manager.get_runtime(language_type)
+        
+        # Execute code
+        result = await runtime.run_code(
+            code=built_code,
+            language=str(language_type),
+            timeout_ms=5000,
+        )
+        
+        # Parse result
+        if not result.success:
+            from app.domain.entity.evaluator_entity import EvaluatorRunError
+            return EvaluatorOutputData(
+                evaluator_run_error=EvaluatorRunError(
+                    code=500,
+                    message=result.error or result.stderr,
+                ),
+                stdout=result.stdout,
+            )
+        
+        # Parse evaluation result
+        try:
+            import json
+            eval_result = json.loads(result.ret_val) if result.ret_val else {}
+        except:
+            eval_result = {"score": None, "reason": result.ret_val}
+        
+        evaluator_result = EvaluatorResult(
+            score=eval_result.get("score"),
+            reasoning=eval_result.get("reason", ""),
+        )
+        
+        return EvaluatorOutputData(
+            evaluator_result=evaluator_result,
+            stdout=result.stdout,
         )
 

@@ -11,6 +11,9 @@ from app.utils.dataset_validator import (
 from datetime import datetime
 import json
 
+# 必需字段定义
+REQUIRED_FIELD_KEYS = ['input', 'reference_output']
+
 
 class DatasetService:
     def __init__(self, db: Session):
@@ -55,6 +58,12 @@ class DatasetService:
         
         # Create initial schema if field_schemas provided
         if field_schemas:
+            # Validate required fields
+            schema_dict = {"field_definitions": field_schemas}
+            errors = self.validate_schema(schema_dict)
+            if errors:
+                raise ValueError(f"Schema validation errors: {', '.join(errors)}")
+            
             self.create_schema(
                 dataset_id=dataset.id,
                 name="default",
@@ -197,6 +206,12 @@ class DatasetService:
         field_schemas: List[Dict[str, Any]]
     ) -> Optional[DatasetSchema]:
         """Update dataset schema"""
+        # Validate required fields
+        schema_dict = {"field_definitions": field_schemas}
+        errors = self.validate_schema(schema_dict)
+        if errors:
+            raise ValueError(f"Schema validation errors: {', '.join(errors)}")
+        
         schema = self.get_dataset_schema(dataset_id)
         if not schema:
             # Create new schema if none exists
@@ -212,6 +227,29 @@ class DatasetService:
             self.db.refresh(schema)
         
         return schema
+
+    def _validate_required_fields(self, field_definitions: List[Dict[str, Any]]) -> List[str]:
+        """Validate that required fields (input and reference_output) exist and have correct keys"""
+        errors = []
+        existing_keys = set()
+        
+        for field in field_definitions:
+            if isinstance(field, dict):
+                key = field.get("key")
+                if key:
+                    existing_keys.add(key)
+        
+        # Check for required fields
+        for required_key in REQUIRED_FIELD_KEYS:
+            if required_key not in existing_keys:
+                errors.append(f"Missing required field: '{required_key}'")
+            else:
+                # Verify the field has the correct key
+                field = next((f for f in field_definitions if isinstance(f, dict) and f.get("key") == required_key), None)
+                if field and field.get("key") != required_key:
+                    errors.append(f"Required field '{required_key}' must have key '{required_key}', got '{field.get('key')}'")
+        
+        return errors
 
     def validate_schema(self, schema: Dict[str, Any]) -> List[str]:
         """Validate schema structure"""
@@ -235,6 +273,10 @@ class DatasetService:
                 errors.append(f"Duplicate field key: {key}")
             else:
                 seen_keys.add(key)
+        
+        # Validate required fields
+        required_field_errors = self._validate_required_fields(field_definitions)
+        errors.extend(required_field_errors)
         
         return errors
 

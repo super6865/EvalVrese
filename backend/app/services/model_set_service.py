@@ -390,27 +390,23 @@ class ModelSetService:
         Returns:
             Debug result
         """
-        model_version = config.get('model_version')
-        encrypted_api_key = config.get('api_key')
+        # Check if config has model_config_id (preferred way)
+        model_config_id = config.get('model_config_id')
         
-        if not model_version or not encrypted_api_key:
-            return {
-                'success': False,
-                'message': 'Model version and API key are required'
-            }
+        # Prepare messages from test_data
+        messages = None
+        if 'messages' in test_data:
+            messages = test_data['messages']
+            if not isinstance(messages, list):
+                messages = None
         
-        # Decrypt API key for internal use
-        api_key = decrypt_api_key(encrypted_api_key)
-        
-        # Prepare prompt text from test_data
+        # Prepare prompt text from test_data (for backward compatibility)
         prompt_text = None
         if 'prompt' in test_data:
             prompt_text = test_data['prompt']
-        elif 'messages' in test_data:
-            # Convert messages to a single prompt text
-            messages = test_data['messages']
-            if isinstance(messages, list) and len(messages) > 0:
-                # Use the last user message, or concatenate all messages
+        elif messages:
+            # Convert messages to a single prompt text (for fallback)
+            if len(messages) > 0:
                 prompt_parts = []
                 for msg in messages:
                     role = msg.get('role', 'user') if isinstance(msg, dict) else 'user'
@@ -422,151 +418,223 @@ class ModelSetService:
                     elif role == 'system':
                         prompt_parts.append(f"System: {content}")
                 prompt_text = '\n\n'.join(prompt_parts) if prompt_parts else str(messages)
-            else:
-                prompt_text = str(messages)
         else:
             return {
                 'success': False,
                 'message': 'Test data must contain "prompt" or "messages"'
             }
             
-        if not prompt_text:
+        if not prompt_text and not messages:
             prompt_text = json.dumps(test_data, ensure_ascii=False)
         
-        try:
-            # Ensure timeout is an integer (may come as string from JSON)
-            timeout_value = config.get('timeout', 120)
-            if isinstance(timeout_value, str):
-                try:
-                    timeout_value = int(timeout_value)
-                except (ValueError, TypeError):
-                    timeout_value = 120
-            elif not isinstance(timeout_value, int):
-                timeout_value = int(timeout_value) if timeout_value is not None else 120
+        # Use LLMService if model_config_id is available
+        if model_config_id:
+            logger.info(f"[DebugModel] Using LLMService with model_config_id={model_config_id}")
+            from app.services.llm_service import LLMService
             
-            # Ensure temperature is a float (may come as string from JSON)
-            temperature_value = config.get('temperature')
-            if temperature_value is not None:
-                if isinstance(temperature_value, str):
-                    try:
-                        temperature_value = float(temperature_value)
-                    except (ValueError, TypeError):
-                        temperature_value = None
-                elif not isinstance(temperature_value, (int, float)):
-                    try:
-                        temperature_value = float(temperature_value)
-                    except (ValueError, TypeError):
-                        temperature_value = None
+            llm_service = LLMService(self.db)
             
-            # Ensure max_tokens is an integer (may come as string from JSON)
-            max_tokens_value = config.get('max_tokens')
-            if max_tokens_value is not None:
-                if isinstance(max_tokens_value, str):
-                    try:
-                        max_tokens_value = int(max_tokens_value)
-                    except (ValueError, TypeError):
-                        max_tokens_value = None
-                elif not isinstance(max_tokens_value, int):
-                    try:
-                        max_tokens_value = int(max_tokens_value)
-                    except (ValueError, TypeError):
-                        max_tokens_value = None
+            # Get temperature, max_tokens, timeout from config (may override model_config defaults)
+            temperature = config.get("temperature")
+            max_tokens = config.get("max_tokens")
+            timeout = config.get("timeout")
             
-            # Create autogen config from model config (supports qwen and all other model types)
-            # Import here to avoid circular import with autogen_helper
-            from app.utils.autogen_helper import create_autogen_config_from_model_config, _clear_agent_chat_messages
-            
-            model_config_dict = {
-                "model_type": config.get('model_type', 'openai'),
-                "model_version": model_version,
-                "api_key": api_key,
-                "api_base": config.get('api_base'),
-                "temperature": temperature_value,
-                "max_tokens": max_tokens_value,
-                "timeout": timeout_value,
-            }
-            
-            autogen_config = create_autogen_config_from_model_config(model_config_dict)
-            
-            # Create AutoGen agent
-            agent = ConversableAgent(
-                name="debug_agent",
-                system_message="You are a helpful assistant. Respond to user requests directly and concisely.",
-                llm_config=autogen_config,
-                human_input_mode="NEVER",
-                max_consecutive_auto_reply=1,
-            )
-            
-            # Clear chat history before generating reply
-            # This ensures each debug invocation is independent and doesn't reuse previous results
-            _clear_agent_chat_messages(agent)
-            
-            # Generate reply using AutoGen agent
-            # Note: AutoGen's generate_reply is synchronous, but we're in async context
-            # We need to run it in a thread pool
-            loop = asyncio.get_event_loop()
-            
-            response = await loop.run_in_executor(
-                None,
-                lambda: agent.generate_reply(
-                    messages=[{"role": "user", "content": prompt_text}]
-                )
-            )
-            
-            # Extract content from response
-            if isinstance(response, dict):
-                content = response.get("content", "")
-            elif hasattr(response, "content"):
-                content = response.content
+            # Convert messages if available, otherwise use prompt_text
+            if messages:
+                # Use messages directly
+                messages_to_send = messages
             else:
-                content = str(response)
-            
-            # Try to extract token usage from agent's internal state
-            input_tokens = 0
-            output_tokens = 0
-            model_name = model_version
+                # Use prompt_text as user message
+                messages_to_send = [{"role": "user", "content": prompt_text}]
             
             try:
-                # Try various ways to extract token usage (similar to AutoGenEvaluator)
-                if hasattr(agent, 'last_cost'):
-                    cost_info = agent.last_cost
-                    if isinstance(cost_info, dict):
-                        input_tokens = cost_info.get("input_tokens", 0) or cost_info.get("prompt_tokens", 0)
-                        output_tokens = cost_info.get("output_tokens", 0) or cost_info.get("completion_tokens", 0)
+                llm_response = await llm_service.invoke(
+                    messages=messages_to_send,
+                    model_config_id=model_config_id,
+                    system_message="You are a helpful assistant. Respond to user requests directly and concisely.",
+                    temperature=float(temperature) if temperature is not None else None,
+                    max_tokens=int(max_tokens) if max_tokens is not None else None,
+                    timeout=int(timeout) if timeout is not None else None,
+                )
                 
-                if hasattr(agent, 'usage'):
-                    usage = agent.usage
-                    if isinstance(usage, dict):
-                        input_tokens = usage.get("input_tokens", 0) or usage.get("prompt_tokens", 0) or input_tokens
-                        output_tokens = usage.get("output_tokens", 0) or usage.get("completion_tokens", 0) or output_tokens
+                if llm_response.error:
+                    return {
+                        'success': False,
+                        'message': f'LLM invocation error: {llm_response.error}',
+                        'response': '',
+                        'input_tokens': 0,
+                        'output_tokens': 0,
+                        'model': config.get('model_version', 'unknown'),
+                    }
                 
-                if hasattr(agent, 'chat_messages'):
-                    messages = agent.chat_messages
-                    if messages and len(messages) > 0:
-                        last_message = messages[-1]
-                        if isinstance(last_message, dict) and "usage" in last_message:
-                            usage = last_message["usage"]
-                            if isinstance(usage, dict):
-                                input_tokens = usage.get("input_tokens", 0) or usage.get("prompt_tokens", 0) or input_tokens
-                                output_tokens = usage.get("output_tokens", 0) or usage.get("completion_tokens", 0) or output_tokens
+                return {
+                    'success': True,
+                    'message': 'Debug successful',
+                    'response': llm_response.content,
+                    'input_tokens': llm_response.token_usage.input_tokens,
+                    'output_tokens': llm_response.token_usage.output_tokens,
+                    'model': llm_response.metadata.get('model', config.get('model_version', 'unknown')),
+                }
             except Exception as e:
-                logger.warning(f"Failed to extract token usage from AutoGen agent: {str(e)}")
+                logger.error(f"[DebugModel] LLMService invocation failed: {str(e)}", exc_info=True)
+                return {
+                    'success': False,
+                    'message': f'LLM invocation error: {str(e)}',
+                    'response': '',
+                    'input_tokens': 0,
+                    'output_tokens': 0,
+                    'model': config.get('model_version', 'unknown'),
+                }
+        else:
+            # Fallback to old AutoGen agent creation (for backward compatibility)
+            logger.warning("[DebugModel] model_config_id not found in config, falling back to direct agent creation")
             
-            return {
-                'success': True,
-                'message': 'Debug successful',
-                'response': content,
-                'input_tokens': input_tokens,
-                'output_tokens': output_tokens,
-                'model': model_name,
-            }
-        except Exception as e:
-            logger.error(f"Failed to debug model: {str(e)}", exc_info=True)
-            return {
-                'success': False,
-                'message': f'Model call failed: {str(e)}',
-                'error': str(e)
-            }
+            model_version = config.get('model_version')
+            encrypted_api_key = config.get('api_key')
+            
+            if not model_version or not encrypted_api_key:
+                return {
+                    'success': False,
+                    'message': 'Model version and API key are required'
+                }
+            
+            # Decrypt API key for internal use
+            api_key = decrypt_api_key(encrypted_api_key)
+            
+            try:
+                # Ensure timeout is an integer (may come as string from JSON)
+                timeout_value = config.get('timeout', 120)
+                if isinstance(timeout_value, str):
+                    try:
+                        timeout_value = int(timeout_value)
+                    except (ValueError, TypeError):
+                        timeout_value = 120
+                elif not isinstance(timeout_value, int):
+                    timeout_value = int(timeout_value) if timeout_value is not None else 120
+                
+                # Ensure temperature is a float (may come as string from JSON)
+                temperature_value = config.get('temperature')
+                if temperature_value is not None:
+                    if isinstance(temperature_value, str):
+                        try:
+                            temperature_value = float(temperature_value)
+                        except (ValueError, TypeError):
+                            temperature_value = None
+                    elif not isinstance(temperature_value, (int, float)):
+                        try:
+                            temperature_value = float(temperature_value)
+                        except (ValueError, TypeError):
+                            temperature_value = None
+                
+                # Ensure max_tokens is an integer (may come as string from JSON)
+                max_tokens_value = config.get('max_tokens')
+                if max_tokens_value is not None:
+                    if isinstance(max_tokens_value, str):
+                        try:
+                            max_tokens_value = int(max_tokens_value)
+                        except (ValueError, TypeError):
+                            max_tokens_value = None
+                    elif not isinstance(max_tokens_value, int):
+                        try:
+                            max_tokens_value = int(max_tokens_value)
+                        except (ValueError, TypeError):
+                            max_tokens_value = None
+                
+                # Create autogen config from model config (supports qwen and all other model types)
+                # Import here to avoid circular import with autogen_helper
+                from app.utils.autogen_helper import create_autogen_config_from_model_config, _clear_agent_chat_messages
+                
+                model_config_dict = {
+                    "model_type": config.get('model_type', 'openai'),
+                    "model_version": model_version,
+                    "api_key": api_key,
+                    "api_base": config.get('api_base'),
+                    "temperature": temperature_value,
+                    "max_tokens": max_tokens_value,
+                    "timeout": timeout_value,
+                }
+                
+                autogen_config = create_autogen_config_from_model_config(model_config_dict)
+                
+                # Create AutoGen agent
+                agent = ConversableAgent(
+                    name="debug_agent",
+                    system_message="You are a helpful assistant. Respond to user requests directly and concisely.",
+                    llm_config=autogen_config,
+                    human_input_mode="NEVER",
+                    max_consecutive_auto_reply=1,
+                )
+                
+                # Clear chat history before generating reply
+                # This ensures each debug invocation is independent and doesn't reuse previous results
+                _clear_agent_chat_messages(agent)
+                
+                # Generate reply using AutoGen agent
+                # Note: AutoGen's generate_reply is synchronous, but we're in async context
+                # We need to run it in a thread pool
+                loop = asyncio.get_event_loop()
+                
+                response = await loop.run_in_executor(
+                    None,
+                    lambda: agent.generate_reply(
+                        messages=[{"role": "user", "content": prompt_text}]
+                    )
+                )
+                
+                # Extract content from response
+                if isinstance(response, dict):
+                    content = response.get("content", "")
+                elif hasattr(response, "content"):
+                    content = response.content
+                else:
+                    content = str(response)
+                
+                # Try to extract token usage from agent's internal state
+                input_tokens = 0
+                output_tokens = 0
+                model_name = model_version
+                
+                try:
+                    # Try various ways to extract token usage from AutoGen agent
+                    if hasattr(agent, 'last_cost'):
+                        cost_info = agent.last_cost
+                        if isinstance(cost_info, dict):
+                            input_tokens = cost_info.get("input_tokens", 0) or cost_info.get("prompt_tokens", 0)
+                            output_tokens = cost_info.get("output_tokens", 0) or cost_info.get("completion_tokens", 0)
+                    
+                    if hasattr(agent, 'usage'):
+                        usage = agent.usage
+                        if isinstance(usage, dict):
+                            input_tokens = usage.get("input_tokens", 0) or usage.get("prompt_tokens", 0) or input_tokens
+                            output_tokens = usage.get("output_tokens", 0) or usage.get("completion_tokens", 0) or output_tokens
+                    
+                    if hasattr(agent, 'chat_messages'):
+                        messages = agent.chat_messages
+                        if messages and len(messages) > 0:
+                            last_message = messages[-1]
+                            if isinstance(last_message, dict) and "usage" in last_message:
+                                usage = last_message["usage"]
+                                if isinstance(usage, dict):
+                                    input_tokens = usage.get("input_tokens", 0) or usage.get("prompt_tokens", 0) or input_tokens
+                                    output_tokens = usage.get("output_tokens", 0) or usage.get("completion_tokens", 0) or output_tokens
+                except Exception as e:
+                    logger.warning(f"Failed to extract token usage from AutoGen agent: {str(e)}")
+                
+                return {
+                    'success': True,
+                    'message': 'Debug successful',
+                    'response': content,
+                    'input_tokens': input_tokens,
+                    'output_tokens': output_tokens,
+                    'model': model_name,
+                }
+            except Exception as e:
+                logger.error(f"Failed to debug model (fallback): {str(e)}", exc_info=True)
+                return {
+                    'success': False,
+                    'message': f'Model call failed: {str(e)}',
+                    'error': str(e)
+                }
     
     def _model_set_to_dict(self, model_set: ModelSet) -> Dict[str, Any]:
         """

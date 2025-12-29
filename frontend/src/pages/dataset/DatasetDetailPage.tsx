@@ -83,7 +83,45 @@ export default function DatasetDetailPage() {
     try {
       const schema = await datasetService.getSchema(datasetId)
       if (schema?.field_definitions) {
-        setFieldSchemas(schema.field_definitions)
+        // 确保必需字段存在（向后兼容）
+        const requiredFieldKeys = ['input', 'reference_output']
+        const existingKeys = schema.field_definitions.map((f: FieldSchema) => f.key).filter(Boolean)
+        const missingRequiredFields = requiredFieldKeys.filter(key => !existingKeys.includes(key))
+        
+        let fieldDefinitions = [...schema.field_definitions]
+        
+        // 如果缺少必需字段，自动补充
+        if (missingRequiredFields.length > 0) {
+          const requiredFieldsToAdd: FieldSchema[] = []
+          if (missingRequiredFields.includes('input')) {
+            requiredFieldsToAdd.push({
+              key: 'input',
+              name: 'input',
+              description: '评测输入字段（系统必需）',
+              content_type: 'Text',
+              default_display_format: 'PlainText',
+              status: 'Available',
+              hidden: false,
+              is_required: true,
+            })
+          }
+          if (missingRequiredFields.includes('reference_output')) {
+            requiredFieldsToAdd.push({
+              key: 'reference_output',
+              name: 'reference_output',
+              description: '评测标准输出字段（系统必需）',
+              content_type: 'Text',
+              default_display_format: 'PlainText',
+              status: 'Available',
+              hidden: false,
+              is_required: true,
+            })
+          }
+          // 将必需字段放在最前面
+          fieldDefinitions = [...requiredFieldsToAdd, ...fieldDefinitions]
+        }
+        
+        setFieldSchemas(fieldDefinitions)
       }
     } catch (error) {
       // Schema might not exist
@@ -92,6 +130,31 @@ export default function DatasetDetailPage() {
 
   const handleUpdateSchema = async (schemas: FieldSchema[]) => {
     if (!datasetId) return
+    
+    // 验证必需字段
+    const requiredFieldKeys = ['input', 'reference_output']
+    const existingKeys = schemas.map(s => s.key).filter(Boolean)
+    const missingRequiredFields = requiredFieldKeys.filter(key => !existingKeys.includes(key))
+    
+    if (missingRequiredFields.length > 0) {
+      message.error(`缺少系统必需字段: ${missingRequiredFields.join(', ')}`)
+      return
+    }
+    
+    // 验证必需字段的key是否正确
+    const inputField = schemas.find(s => s.key === 'input')
+    const referenceOutputField = schemas.find(s => s.key === 'reference_output')
+    
+    if (inputField && inputField.key !== 'input') {
+      message.error('输入字段的键名必须为 "input"')
+      return
+    }
+    
+    if (referenceOutputField && referenceOutputField.key !== 'reference_output') {
+      message.error('标准输出字段的键名必须为 "reference_output"')
+      return
+    }
+    
     try {
       await datasetService.updateSchema(datasetId, schemas)
       message.success('Schema 更新成功')
@@ -341,11 +404,7 @@ export default function DatasetDetailPage() {
           <Button
             type="primary"
             onClick={() => {
-              if (fieldSchemas.length > 0) {
-                handleUpdateSchema(fieldSchemas)
-              } else {
-                message.warning('请至少添加一个字段')
-              }
+              handleUpdateSchema(fieldSchemas)
             }}
           >
             保存

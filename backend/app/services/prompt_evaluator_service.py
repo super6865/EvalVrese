@@ -18,7 +18,7 @@ from app.domain.entity.evaluator_entity import (
 )
 from app.domain.entity.evaluator_types import ParseType, Role, ContentType
 from app.services.model_config_service import ModelConfigService
-from app.utils.autogen_helper import AutoGenEvaluator, create_autogen_config_from_model_config
+from app.services.llm_service import LLMService
 
 logger = logging.getLogger(__name__)
 
@@ -286,6 +286,9 @@ class PromptEvaluatorService:
             if db_config and db_config.api_key:
                 model_config_dict['api_key'] = decrypt_api_key(db_config.api_key)
             
+            # Ensure model_config_id is in the dict for LLMService
+            model_config_dict['model_config_id'] = model_config_id
+            
             # Use autogen framework
             return await self._run_with_autogen(
                 message_list=message_list,
@@ -396,15 +399,7 @@ class PromptEvaluatorService:
         logger.info("[EvaluatorPrompt] ========== End AutoGen Prompt Information ==========")
         logger.info("=" * 80)
         
-        # Create AutoGen evaluator
-        autogen_config = {
-            "system_message": system_message,
-            "model_config_dict": model_config_dict,
-        }
-        
-        evaluator = AutoGenEvaluator(autogen_config)
-        
-        # Build input data for autogen
+        # Build input data for evaluation
         input_dict = {}
         if input_data.input_fields:
             for key, value in input_data.input_fields.items():
@@ -440,31 +435,67 @@ class PromptEvaluatorService:
                         reference_output = value.text
                         break
         
-        # Evaluate using autogen (synchronous call)
-        result = evaluator.evaluate(
-            input_data=input_dict,
-            actual_output=actual_output or user_message,
-            reference_output=reference_output,
+        # Build evaluation message for LLM evaluation
+        message_parts = [
+            "Please evaluate the following:",
+            f"\nInput: {json.dumps(input_dict, ensure_ascii=False)}",
+            f"\nActual Output: {actual_output or user_message}",
+        ]
+        
+        if reference_output:
+            message_parts.append(f"\nReference Output: {reference_output}")
+        
+        message_parts.append(
+            "\n\nPlease provide your evaluation in JSON format with 'score' (0.0-1.0) and 'reason' fields."
         )
         
-        # Parse response
-        parsed_result = self._parse_response(
-            json.dumps(result) if isinstance(result, dict) else str(result),
-            parse_type
+        evaluation_message = "".join(message_parts)
+        
+        # Use LLMService for unified LLM invocation
+        model_config_id = model_config_dict.get("model_config_id")
+        if not model_config_id:
+            # This should not happen as model_config_id is required
+            raise ValueError("model_config_id is required but not found in model_config_dict")
+        
+        llm_service = LLMService(self.db)
+        llm_response = await llm_service.invoke(
+            messages=[{"role": "user", "content": evaluation_message}],
+            model_config_id=model_config_id,
+            system_message=system_message,
+            temperature=model_config_dict.get("temperature"),
+            max_tokens=model_config_dict.get("max_tokens"),
+            timeout=model_config_dict.get("timeout"),
         )
         
-        # Build result
-        evaluator_result = EvaluatorResult(
-            score=parsed_result.get("score") or result.get("score"),
-            reasoning=parsed_result.get("reason", "") or result.get("reason", ""),
-        )
-        
-        # Extract token usage from result
-        token_usage = result.get("token_usage", {})
-        evaluator_usage = EvaluatorUsage(
-            input_tokens=token_usage.get("input_tokens", 0) or 0,
-            output_tokens=token_usage.get("output_tokens", 0) or 0,
-        )
+        # Check for errors
+        if llm_response.error:
+            logger.error(f"[EvaluatorPrompt] LLM invocation failed: {llm_response.error}")
+            evaluator_result = EvaluatorResult(
+                score=None,
+                reasoning=f"LLM invocation error: {llm_response.error}",
+            )
+            evaluator_usage = EvaluatorUsage(
+                input_tokens=0,
+                output_tokens=0,
+            )
+        else:
+            # Parse response
+            parsed_result = self._parse_response(
+                llm_response.content,
+                parse_type
+            )
+            
+            # Build result
+            evaluator_result = EvaluatorResult(
+                score=parsed_result.get("score"),
+                reasoning=parsed_result.get("reason", ""),
+            )
+            
+            # Extract token usage from LLMResponse
+            evaluator_usage = EvaluatorUsage(
+                input_tokens=llm_response.token_usage.input_tokens,
+                output_tokens=llm_response.token_usage.output_tokens,
+            )
         
         # Calculate time
         time_consuming_ms = int((time.time() - start_time) * 1000)

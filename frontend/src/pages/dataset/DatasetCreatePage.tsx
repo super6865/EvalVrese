@@ -11,8 +11,27 @@ export default function DatasetCreatePage() {
   const [fieldSchemas, setFieldSchemas] = useState<FieldSchema[]>([])
 
   const handleSubmit = async (values: any) => {
-    if (fieldSchemas.length === 0) {
-      message.warning('请至少添加一个字段')
+    // 验证必需字段
+    const requiredFieldKeys = ['input', 'reference_output']
+    const existingKeys = fieldSchemas.map(s => s.key).filter(Boolean)
+    const missingRequiredFields = requiredFieldKeys.filter(key => !existingKeys.includes(key))
+    
+    if (missingRequiredFields.length > 0) {
+      message.error(`缺少系统必需字段: ${missingRequiredFields.join(', ')}`)
+      return
+    }
+
+    // 验证必需字段的key是否正确
+    const inputField = fieldSchemas.find(s => s.key === 'input')
+    const referenceOutputField = fieldSchemas.find(s => s.key === 'reference_output')
+    
+    if (inputField && inputField.key !== 'input') {
+      message.error('输入字段的键名必须为 "input"')
+      return
+    }
+    
+    if (referenceOutputField && referenceOutputField.key !== 'reference_output') {
+      message.error('标准输出字段的键名必须为 "reference_output"')
       return
     }
 

@@ -589,27 +589,12 @@ async def debug_prompt(
                 text=str(value),
             )
     
-    # Directly call LLM model for debugging (not using evaluator)
-    # Build autogen config
-    from app.utils.autogen_helper import create_autogen_config_from_model_config, _clear_agent_chat_messages
-    from autogen import ConversableAgent
-    import asyncio
+    # Use LLMService for unified LLM invocation
+    from app.services.llm_service import LLMService
     
-    # Prepare autogen config dict
-    autogen_config_dict = {
-        "model_type": model_config_dict.get("model_type", "openai"),
-        "model_version": model_config_dict.get("model_version"),
-        "api_key": model_config_dict.get("api_key"),
-        "api_base": model_config_dict.get("api_base"),
-        "temperature": model_config.get("temperature", model_config_dict.get("temperature", 0.7)),
-        "max_tokens": model_config.get("max_tokens", model_config_dict.get("max_tokens", 2000)),
-        "timeout": model_config_dict.get("timeout", 120),
-    }
-    
-    autogen_config = create_autogen_config_from_model_config(autogen_config_dict)
-    
-    # Build messages for AutoGen (convert to AutoGen format)
-    autogen_messages = []
+    # Build messages for LLM (convert to LLM format and replace variables)
+    llm_messages = []
+    system_message = None
     for msg in messages:
         role = msg.get("role", "user")
         content = msg.get("content", "")
@@ -632,50 +617,46 @@ async def debug_prompt(
                 content_text = content_text.replace(placeholder_double, value_text)
                 content_text = content_text.replace(placeholder_single, value_text)
         
-        autogen_messages.append({"role": role, "content": content_text})
+        if role == "system":
+            system_message = content_text
+        else:
+            llm_messages.append({"role": role, "content": content_text})
     
-    # Execute
+    # Use default system message if not found
+    if not system_message:
+        system_message = "You are a helpful assistant. Respond to user requests directly and concisely."
+    
+    # Execute using LLMService
     start_time = time.time()
     try:
-        # Create AutoGen agent
-        agent = ConversableAgent(
-            name="debug_agent",
-            system_message="You are a helpful assistant. Respond to user requests directly and concisely.",
-            llm_config=autogen_config,
-            human_input_mode="NEVER",
-            max_consecutive_auto_reply=1,
+        llm_service = LLMService(db)
+        llm_response = await llm_service.invoke(
+            messages=llm_messages,
+            model_config_id=model_config_id,
+            system_message=system_message,
+            temperature=float(model_config.get("temperature")) if model_config.get("temperature") is not None else None,
+            max_tokens=int(model_config.get("max_tokens")) if model_config.get("max_tokens") is not None else None,
+            timeout=int(model_config_dict.get("timeout", 120)),
         )
         
-        # Clear chat history before generating reply
-        # This ensures each debug invocation is independent and doesn't reuse previous results
-        _clear_agent_chat_messages(agent)
+        if llm_response.error:
+            execution_time_ms = int((time.time() - start_time) * 1000)
+            return {
+                "success": False,
+                "error": llm_response.error,
+                "data": {
+                    "content": "",
+                    "usage": {
+                        "input_tokens": 0,
+                        "output_tokens": 0,
+                    },
+                    "time_consuming_ms": execution_time_ms,
+                },
+            }
         
-        # Generate reply using AutoGen agent
-        loop = asyncio.get_event_loop()
-        response = await loop.run_in_executor(
-            None,
-            lambda: agent.generate_reply(messages=autogen_messages)
-        )
-        
-        # Extract content from response
-        if isinstance(response, dict):
-            response_content = response.get("content", "")
-        elif hasattr(response, "content"):
-            response_content = response.content
-        else:
-            response_content = str(response)
-        
-        # Try to extract token usage from agent's internal state
-        input_tokens = 0
-        output_tokens = 0
-        try:
-            if hasattr(agent, "client") and hasattr(agent.client, "cost"):
-                cost_info = agent.client.cost
-                if isinstance(cost_info, dict):
-                    input_tokens = cost_info.get("prompt_tokens", 0) or cost_info.get("input_tokens", 0) or 0
-                    output_tokens = cost_info.get("completion_tokens", 0) or cost_info.get("output_tokens", 0) or 0
-        except Exception:
-            pass
+        response_content = llm_response.content
+        input_tokens = llm_response.token_usage.input_tokens
+        output_tokens = llm_response.token_usage.output_tokens
         
         execution_time_ms = int((time.time() - start_time) * 1000)
         

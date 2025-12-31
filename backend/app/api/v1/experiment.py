@@ -1,7 +1,7 @@
 """
 Experiment API endpoints
 """
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, ConfigDict
@@ -90,10 +90,17 @@ class ValidateComparisonRequest(BaseModel):
 
 # Experiment CRUD
 @router.get("")
-async def list_experiments(skip: int = 0, limit: int = 100, name: Optional[str] = None, group_id: Optional[int] = None, db: Session = Depends(get_db)):
-    """List all experiments with optional name and group_id filter"""
+async def list_experiments(
+    skip: int = 0, 
+    limit: int = 100, 
+    name: Optional[str] = None, 
+    group_id: Optional[int] = None,
+    status: Optional[List[str]] = Query(None),
+    db: Session = Depends(get_db)
+):
+    """List all experiments with optional name, group_id and status filters"""
     service = ExperimentService(db)
-    experiments, total = service.list_experiments(skip=skip, limit=limit, name=name, group_id=group_id)
+    experiments, total = service.list_experiments(skip=skip, limit=limit, name=name, group_id=group_id, status=status)
     return {"experiments": experiments, "total": total}
 
 

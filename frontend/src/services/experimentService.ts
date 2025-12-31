@@ -15,13 +15,16 @@ export interface Experiment {
 }
 
 export const experimentService = {
-  list: async (skip = 0, limit = 100, name?: string, groupId?: number) => {
+  list: async (skip = 0, limit = 100, name?: string, groupId?: number, status?: string[]) => {
     const params: any = { skip, limit }
     if (name) {
       params.name = name
     }
     if (groupId !== undefined) {
       params.group_id = groupId
+    }
+    if (status && status.length > 0) {
+      params.status = status
     }
     const response = await api.get('/experiments', { params })
     return response.data

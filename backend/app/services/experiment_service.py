@@ -158,7 +158,7 @@ class ExperimentService:
         """Get experiment by ID"""
         return self.db.query(Experiment).filter(Experiment.id == experiment_id).first()
 
-    def list_experiments(self, skip: int = 0, limit: int = 100, name: Optional[str] = None, group_id: Optional[int] = None) -> Tuple[List[Experiment], int]:
+    def list_experiments(self, skip: int = 0, limit: int = 100, name: Optional[str] = None, group_id: Optional[int] = None, status: Optional[List[str]] = None) -> Tuple[List[Experiment], int]:
         """List all experiments with pagination"""
         query = self.db.query(Experiment)
         # 如果提供了名称，进行模糊查询（不区分大小写）
@@ -167,6 +167,9 @@ class ExperimentService:
         # 如果提供了 group_id，进行过滤
         if group_id is not None:
             query = query.filter(Experiment.group_id == group_id)
+        # 如果提供了 status，进行过滤
+        if status:
+            query = query.filter(Experiment.status.in_(status))
         total = query.count()
         experiments = query.offset(skip).limit(limit).all()
         return experiments, total

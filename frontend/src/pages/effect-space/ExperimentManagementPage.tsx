@@ -471,7 +471,8 @@ export default function ExperimentManagementPage() {
                 skip, 
                 params.page_size, 
                 params.name,
-                groupId
+                groupId,
+                ['completed', 'failed']
               )
               const sortedExperiments = [...(response.experiments || [])].sort((a, b) => {
                 const timeA = new Date(a.updated_at || 0).getTime()
@@ -491,7 +492,7 @@ export default function ExperimentManagementPage() {
           totalKey="total"
           viewPath={(id) => `/experiments/${id}`}
           searchPlaceholder="搜索实验名称"
-          autoRefresh={5000}
+          autoRefresh={60000}
         />
       </Content>
 

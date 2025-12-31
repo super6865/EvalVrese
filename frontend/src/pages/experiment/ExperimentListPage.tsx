@@ -193,7 +193,7 @@ export default function ExperimentListPage() {
       viewPath={(id) => `/experiments/${id}`}
       createPath="/experiments/create"
       searchPlaceholder="搜索实验名称"
-      autoRefresh={5000}
+      autoRefresh={3000}
       filters={(searchText, setSearchText) => (
         <Input
           placeholder="搜索实验名称"

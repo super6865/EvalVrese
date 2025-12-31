@@ -36,6 +36,21 @@ class ExportStatus(str, enum.Enum):
     FAILED = "FAILED"
 
 
+class ExperimentGroup(Base):
+    __tablename__ = "experiment_groups"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(255), nullable=False, index=True)
+    parent_id = Column(Integer, ForeignKey("experiment_groups.id"), nullable=True, index=True)
+    description = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
+    parent = relationship("ExperimentGroup", remote_side=[id], backref="children")
+    experiments = relationship("Experiment", back_populates="group")
+
+
 class Experiment(Base):
     __tablename__ = "experiments"
 
@@ -52,6 +67,9 @@ class Experiment(Base):
     # List of evaluator version IDs
     evaluator_version_ids = Column(JSON, nullable=False)  # [1, 2, 3]
     
+    # Group association
+    group_id = Column(Integer, ForeignKey("experiment_groups.id"), nullable=True, index=True)
+    
     status = Column(SQLEnum(ExperimentStatus, values_callable=lambda x: [e.value for e in x]), default=ExperimentStatus.PENDING)
     progress = Column(Integer, default=0)  # 0-100
     
@@ -65,6 +83,7 @@ class Experiment(Base):
     created_by = Column(String(100), nullable=True)
 
     # Relationships
+    group = relationship("ExperimentGroup", back_populates="experiments")
     runs = relationship("ExperimentRun", back_populates="experiment", cascade="all, delete-orphan")
     results = relationship("ExperimentResult", back_populates="experiment", cascade="all, delete-orphan")
     aggregate_results = relationship("ExperimentAggregateResult", back_populates="experiment", cascade="all, delete-orphan")

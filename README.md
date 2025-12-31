@@ -27,6 +27,7 @@
 - **Experiment Management**: Batch evaluation with concurrency control and progress tracking
 - **Model Configuration**: Secure API key management and model parameter configuration
 - **Prompt Management**: Template library with version control, draft management, and debugging capabilities
+- **Effect Space**: Unified experiment management with grouping and multi-experiment comparison analysis
 - **Observability**: Distributed tracing with OpenTelemetry integration
 - **Result Analysis**: Experiment comparison and statistical aggregation
 
@@ -52,6 +53,7 @@
 |----------|-------------|
 | **Model Evaluation** | Evaluate multiple LLM models on custom datasets with various evaluators |
 | **Experiment Comparison** | Compare experiment results across different model configurations |
+| **Effect Comparison** | Compare multiple experiments side-by-side with baseline selection and detailed metrics analysis |
 | **Custom Evaluator Development** | Create and test custom evaluation logic using code evaluators |
 | **Batch Processing** | Run large-scale evaluations with concurrency control and progress tracking |
 | **Prompt Template Development** | Create and manage reusable prompt templates with variable placeholders |
@@ -75,7 +77,16 @@
 
 ## 📝 Changelog
 
-### v1.1.1 (Current)
+### v1.2.0 (Current)
+
+**Effect Space** - Added unified experiment management and comparison capabilities:
+
+- ✅ **Experiment Management**: Group-based experiment organization with tree structure
+- ✅ **Effect Dashboard**: Multi-experiment comparison with baseline selection
+- ✅ **Comparison Metrics**: Detailed evaluator scores and runtime metrics comparison
+- ✅ **Data Export**: Export comparison results for further analysis
+
+### v1.1.1
 
 **Experiment Prompt Evaluation** - Added prompt evaluation support in experiments:
 

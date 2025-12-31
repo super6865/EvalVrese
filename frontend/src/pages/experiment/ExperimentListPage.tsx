@@ -171,7 +171,7 @@ export default function ExperimentListPage() {
 
   return (
     <CrudListPage<Experiment>
-      pageTitle="实验管理"
+      pageTitle="实验列表"
       pageSizeStorageKey="experiment_list_page_size"
       columns={columns}
       loadData={async (params) => {

@@ -129,6 +129,7 @@ class ExperimentService:
         evaluator_version_ids: List[int] = None,
         description: Optional[str] = None,
         created_by: Optional[str] = None,
+        group_id: Optional[int] = None,
     ) -> Experiment:
         """Create a new experiment"""
         if evaluation_target_config is None:
@@ -146,6 +147,7 @@ class ExperimentService:
             evaluation_target_config=evaluation_target_config,
             evaluator_version_ids=evaluator_version_ids,
             created_by=created_by,
+            group_id=group_id,
         )
         self.db.add(experiment)
         self.db.commit()
@@ -156,12 +158,15 @@ class ExperimentService:
         """Get experiment by ID"""
         return self.db.query(Experiment).filter(Experiment.id == experiment_id).first()
 
-    def list_experiments(self, skip: int = 0, limit: int = 100, name: Optional[str] = None) -> Tuple[List[Experiment], int]:
+    def list_experiments(self, skip: int = 0, limit: int = 100, name: Optional[str] = None, group_id: Optional[int] = None) -> Tuple[List[Experiment], int]:
         """List all experiments with pagination"""
         query = self.db.query(Experiment)
         # 如果提供了名称，进行模糊查询（不区分大小写）
         if name:
             query = query.filter(Experiment.name.ilike(f"%{name}%"))
+        # 如果提供了 group_id，进行过滤
+        if group_id is not None:
+            query = query.filter(Experiment.group_id == group_id)
         total = query.count()
         experiments = query.offset(skip).limit(limit).all()
         return experiments, total

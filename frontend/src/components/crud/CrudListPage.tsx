@@ -73,6 +73,17 @@ export function CrudListPage<T extends { id: number }>({
   })
   const [total, setTotal] = useState(0)
 
+  // 同步 additionalFilters 的变化到 filtersState
+  // 使用 JSON.stringify 进行深度比较，避免对象引用变化导致的无限循环
+  useEffect(() => {
+    const currentFiltersStr = JSON.stringify(filtersState)
+    const newFiltersStr = JSON.stringify(additionalFilters)
+    if (currentFiltersStr !== newFiltersStr) {
+      setFiltersState(additionalFilters)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [additionalFilters])
+
   const loadItems = async () => {
     setLoading(true)
     try {

@@ -81,6 +81,23 @@ const menuItems: MenuItem[] = [
     ],
   },
   {
+    key: 'effect-space',
+    label: '效果空间',
+    icon: <AppstoreOutlined />,
+    children: [
+      {
+        key: 'experiment-management',
+        label: '实验管理',
+        icon: <FolderOutlined />,
+      },
+      {
+        key: 'dashboard',
+        label: '效果看板',
+        icon: <AppstoreOutlined />,
+      },
+    ],
+  },
+  {
     key: 'monitoring',
     label: '监控',
     icon: <MonitorOutlined />,
@@ -139,6 +156,12 @@ export function Navbar() {
     } else if (path.startsWith('/experiments')) {
       keys.push('experiments')
       open.push('evaluation-task')
+    } else if (path.startsWith('/effect-space/experiment-management')) {
+      keys.push('experiment-management')
+      open.push('effect-space')
+    } else if (path.startsWith('/effect-space/dashboard')) {
+      keys.push('dashboard')
+      open.push('effect-space')
     } else if (path.startsWith('/observability')) {
       keys.push('observability')
       open.push('monitoring')
@@ -155,12 +178,41 @@ export function Navbar() {
   }, [location.pathname])
 
   const handleMenuClick: MenuProps['onClick'] = ({ key }) => {
-    // 只处理叶子节点（子菜单项）的点击
-    const isLeafNode = menuItems.some(item => 
-      item.children?.some(child => child.key === key)
-    )
-    if (isLeafNode) {
-      navigate(`/${key}`)
+    // 处理叶子节点（子菜单项）的点击
+    const findLeafNode = (items: MenuItem[]): MenuItem | null => {
+      for (const item of items) {
+        if (item.children) {
+          for (const child of item.children) {
+            if (child.key === key) {
+              // 检查是否是嵌套的子菜单
+              if (child.children) {
+                return null // 这是父节点，不是叶子节点
+              }
+              return child
+            }
+            // 递归查找嵌套的子菜单
+            if (child.children) {
+              const found = findLeafNode([child])
+              if (found && found.key === key) {
+                return found
+              }
+            }
+          }
+        }
+      }
+      return null
+    }
+    
+    const leafNode = findLeafNode(menuItems)
+    if (leafNode) {
+      // 处理特殊路由
+      if (key === 'experiment-management') {
+        navigate('/effect-space/experiment-management')
+      } else if (key === 'dashboard') {
+        navigate('/effect-space/dashboard')
+      } else {
+        navigate(`/${key}`)
+      }
     }
   }
 

@@ -31,6 +31,7 @@ class ExperimentCreate(BaseModel):
     evaluation_target_config: Optional[Dict[str, Any]] = None  # Optional, can be skipped
     evaluator_version_ids: Optional[List[int]] = None  # Optional, but should have at least one when provided
     description: Optional[str] = None
+    group_id: Optional[int] = None  # Optional group assignment
 
 
 class ExperimentUpdate(BaseModel):
@@ -83,12 +84,16 @@ class CompareExperimentsRequest(BaseModel):
     run_ids: Optional[Dict[int, int]] = None
 
 
+class ValidateComparisonRequest(BaseModel):
+    experiment_ids: List[int]
+
+
 # Experiment CRUD
 @router.get("")
-async def list_experiments(skip: int = 0, limit: int = 100, name: Optional[str] = None, db: Session = Depends(get_db)):
-    """List all experiments with optional name filter"""
+async def list_experiments(skip: int = 0, limit: int = 100, name: Optional[str] = None, group_id: Optional[int] = None, db: Session = Depends(get_db)):
+    """List all experiments with optional name and group_id filter"""
     service = ExperimentService(db)
-    experiments, total = service.list_experiments(skip=skip, limit=limit, name=name)
+    experiments, total = service.list_experiments(skip=skip, limit=limit, name=name, group_id=group_id)
     return {"experiments": experiments, "total": total}
 
 
@@ -151,6 +156,22 @@ async def create_experiment(data: ExperimentCreate, db: Session = Depends(get_db
     if not data.evaluator_version_ids or len(data.evaluator_version_ids) == 0:
         raise HTTPException(status_code=400, detail="At least one evaluator version is required")
     
+    from app.services.experiment_group_service import ExperimentGroupService
+    group_service = ExperimentGroupService(db)
+    
+    # If group_id is not provided, default to "通用实验" group
+    group_id = data.group_id
+    if group_id is None:
+        default_group = group_service.get_default_group()
+        if not default_group:
+            raise HTTPException(status_code=500, detail="Default group '通用实验' not found. Please run database migration.")
+        group_id = default_group.id
+    
+    # Validate group_id
+    group = group_service.get_group(group_id)
+    if not group:
+        raise HTTPException(status_code=400, detail=f"Group with id {group_id} not found")
+    
     service = ExperimentService(db)
     experiment = service.create_experiment(
         name=data.name,
@@ -158,6 +179,7 @@ async def create_experiment(data: ExperimentCreate, db: Session = Depends(get_db
         evaluation_target_config=data.evaluation_target_config,
         evaluator_version_ids=data.evaluator_version_ids or [],
         description=data.description,
+        group_id=group_id,
     )
     return experiment
 
@@ -640,6 +662,68 @@ async def download_export(export_id: int, db: Session = Depends(get_db)):
 
 
 # Comparison endpoints
+@router.post("/validate_comparison")
+@handle_api_errors
+async def validate_comparison(
+    data: ValidateComparisonRequest,
+    db: Session = Depends(get_db)
+):
+    """Validate if experiments can be compared (same dataset and version)"""
+    from app.models.dataset import DatasetVersion
+    
+    if len(data.experiment_ids) < 2:
+        raise HTTPException(status_code=400, detail="At least 2 experiments are required for comparison")
+    
+    service = ExperimentService(db)
+    experiments_info = []
+    dataset_version_ids = set()
+    dataset_ids = set()
+    
+    for exp_id in data.experiment_ids:
+        experiment = service.get_experiment(exp_id)
+        if not experiment:
+            raise HTTPException(status_code=404, detail=f"Experiment {exp_id} not found")
+        
+        # Get dataset version info
+        dataset_version = db.query(DatasetVersion).filter(
+            DatasetVersion.id == experiment.dataset_version_id
+        ).first()
+        
+        if not dataset_version:
+            raise HTTPException(
+                status_code=404, 
+                detail=f"Dataset version {experiment.dataset_version_id} not found for experiment {exp_id}"
+            )
+        
+        dataset_version_ids.add(experiment.dataset_version_id)
+        dataset_ids.add(dataset_version.dataset_id)
+        
+        experiments_info.append({
+            "id": exp_id,
+            "name": experiment.name,
+            "dataset_id": dataset_version.dataset_id,
+            "dataset_version_id": experiment.dataset_version_id,
+            "dataset_name": dataset_version.dataset.name if dataset_version.dataset else "Unknown",
+            "version": dataset_version.version
+        })
+    
+    # Check if all experiments use the same dataset version
+    valid = len(dataset_version_ids) == 1
+    
+    message = None
+    if not valid:
+        if len(dataset_ids) > 1:
+            message = "选择的实验使用了不同的数据集，无法进行对比"
+        else:
+            message = "选择的实验使用了相同数据集但不同版本，无法进行对比"
+    
+    return {
+        "valid": valid,
+        "message": message,
+        "experiments": experiments_info
+    }
+
+
 @router.post("/compare")
 async def compare_experiments(
     data: CompareExperimentsRequest,
@@ -670,6 +754,42 @@ async def get_comparison_summary(
             data.run_ids
         )
         return summary
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/compare/details")
+@handle_api_errors
+async def get_comparison_details(
+    data: CompareExperimentsRequest,
+    db: Session = Depends(get_db)
+):
+    """Get detailed comparison data aligned by dataset_item_id"""
+    comparison_service = ExperimentComparisonService(db)
+    try:
+        details = comparison_service.get_comparison_details(
+            data.experiment_ids,
+            data.run_ids
+        )
+        return details
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/compare/metrics")
+@handle_api_errors
+async def get_comparison_metrics(
+    data: CompareExperimentsRequest,
+    db: Session = Depends(get_db)
+):
+    """Get comparison metrics including evaluator scores and runtime metrics"""
+    comparison_service = ExperimentComparisonService(db)
+    try:
+        metrics = comparison_service.get_comparison_metrics(
+            data.experiment_ids,
+            data.run_ids
+        )
+        return metrics
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 

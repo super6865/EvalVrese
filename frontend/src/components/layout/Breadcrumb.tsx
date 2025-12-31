@@ -20,6 +20,9 @@ const breadcrumbNameMap: Record<string, string> = {
   '/model-configs': '模型配置',
   '/observability': '链路追踪',
   '/trace-analysis': '链路分析',
+  '/effect-space': '效果空间',
+  '/effect-space/experiment-management': '实验管理',
+  '/effect-space/dashboard': '效果看板',
 }
 
 export function Breadcrumb() {

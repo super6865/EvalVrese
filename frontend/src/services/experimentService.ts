@@ -9,15 +9,19 @@ export interface Experiment {
   evaluator_version_ids: number[]
   status: string
   progress: number
+  group_id?: number
   created_at?: string
   updated_at?: string
 }
 
 export const experimentService = {
-  list: async (skip = 0, limit = 100, name?: string) => {
+  list: async (skip = 0, limit = 100, name?: string, groupId?: number) => {
     const params: any = { skip, limit }
     if (name) {
       params.name = name
+    }
+    if (groupId !== undefined) {
+      params.group_id = groupId
     }
     const response = await api.get('/experiments', { params })
     return response.data
@@ -39,6 +43,7 @@ export const experimentService = {
     evaluation_target_config: Record<string, any>
     evaluator_version_ids: number[]
     description?: string
+    group_id?: number
   }) => {
     const response = await api.post('/experiments', data)
     return response.data
@@ -150,6 +155,29 @@ export const experimentService = {
 
   getComparisonSummary: async (experimentIds: number[], runIds?: Record<number, number>) => {
     const response = await api.post('/experiments/compare/summary', {
+      experiment_ids: experimentIds,
+      run_ids: runIds,
+    })
+    return response.data
+  },
+
+  validateComparison: async (experimentIds: number[]) => {
+    const response = await api.post('/experiments/validate_comparison', {
+      experiment_ids: experimentIds,
+    })
+    return response.data
+  },
+
+  getComparisonDetails: async (experimentIds: number[], runIds?: Record<number, number>) => {
+    const response = await api.post('/experiments/compare/details', {
+      experiment_ids: experimentIds,
+      run_ids: runIds,
+    })
+    return response.data
+  },
+
+  getComparisonMetrics: async (experimentIds: number[], runIds?: Record<number, number>) => {
+    const response = await api.post('/experiments/compare/metrics', {
       experiment_ids: experimentIds,
       run_ids: runIds,
     })

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
-import { Form, Input, Button, Card, message, Space, Select, Steps, Spin, Table, Tag } from 'antd'
+import { Form, Input, Button, Card, message, Space, Select, Steps, Spin, Table, Tag, TreeSelect } from 'antd'
 import type { FormInstance } from 'antd/es/form'
 import { ArrowLeftOutlined } from '@ant-design/icons'
 import { datasetService } from '../../services/datasetService'
@@ -8,6 +8,7 @@ import { evaluatorService } from '../../services/evaluatorService'
 import { experimentService } from '../../services/experimentService'
 import { modelSetService } from '../../services/modelSetService'
 import { promptService } from '../../services/promptService'
+import { experimentGroupService, ExperimentGroup } from '../../services/experimentGroupService'
 
 const { TextArea } = Input
 const { Option } = Select
@@ -181,13 +182,35 @@ export default function ExperimentCreatePage() {
   const [selectedEvaluators, setSelectedEvaluators] = useState<number[]>([])
   const [selectedPromptId, setSelectedPromptId] = useState<number | undefined>()
   const [formValues, setFormValues] = useState<any>({})
+  const [groupTree, setGroupTree] = useState<any[]>([])
 
   useEffect(() => {
     loadDatasets()
     loadEvaluators()
     loadModelSets()
     loadPrompts()
+    loadGroups()
   }, [])
+
+  const loadGroups = async () => {
+    try {
+      const response = await experimentGroupService.getTree()
+      const groups = response.groups || []
+      const treeData = convertGroupsToTreeData(groups)
+      setGroupTree(treeData)
+    } catch (error) {
+      // Silently fail, groups are optional
+    }
+  }
+
+  const convertGroupsToTreeData = (groups: ExperimentGroup[]): any[] => {
+    return groups.map(group => ({
+      title: group.name,
+      value: group.id,
+      key: group.id,
+      children: group.children ? convertGroupsToTreeData(group.children) : undefined,
+    }))
+  }
 
   // Handle clone data - populate form after all data is loaded
   useEffect(() => {
@@ -560,6 +583,7 @@ export default function ExperimentCreatePage() {
         evaluation_target_config: evaluationTargetConfig,
         evaluator_version_ids: values.evaluator_version_ids || [],
         description: values.description,
+        group_id: values.group_id,
       })
       message.success('创建成功')
       navigate('/experiments')
@@ -612,6 +636,21 @@ export default function ExperimentCreatePage() {
                 rows={4}
                 showCount
                 maxLength={500}
+              />
+        </Form.Item>
+            <Form.Item
+              name="group_id"
+              label="分组"
+            >
+              <TreeSelect
+                placeholder="选择分组（可选）"
+                treeData={groupTree}
+                allowClear
+                showSearch
+                treeDefaultExpandAll
+                filterTreeNode={(inputValue, node) => {
+                  return node.title?.toString().toLowerCase().includes(inputValue.toLowerCase()) || false
+                }}
               />
         </Form.Item>
           </Card>

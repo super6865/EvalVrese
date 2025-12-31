@@ -23,6 +23,8 @@ const EvaluatorRecordListPage = lazy(() => import('./pages/evaluator/EvaluatorRe
 const EvaluatorRecordDetailPage = lazy(() => import('./pages/evaluator/EvaluatorRecordDetailPage'))
 const ModelConfigPage = lazy(() => import('./pages/model-config/ModelConfigPage'))
 const ModelSetPage = lazy(() => import('./pages/model-set/ModelSetPage'))
+const ExperimentManagementPage = lazy(() => import('./pages/effect-space/ExperimentManagementPage'))
+const DashboardPage = lazy(() => import('./pages/effect-space/DashboardPage'))
 
 // 加载中的占位组件
 const LoadingFallback = () => (
@@ -66,6 +68,9 @@ function App() {
           <Route path="evaluator-records/:id" element={<EvaluatorRecordDetailPage />} />
           {/* 模型配置路由 */}
           <Route path="model-configs" element={<ModelConfigPage />} />
+          {/* 效果空间路由 */}
+          <Route path="effect-space/experiment-management" element={<ExperimentManagementPage />} />
+          <Route path="effect-space/dashboard" element={<DashboardPage />} />
         </Route>
       </Routes>
     </Suspense>

@@ -319,6 +319,24 @@ code {
   color: rgba(var(--coze-fg-2), var(--coze-fg-2-alpha));
 }
 
+/* Compact select for aggregation dropdowns */
+.compact-select .ant-select-selector {
+  height: 24px !important;
+  min-height: 24px !important;
+  padding: 0 8px !important;
+}
+
+.compact-select .ant-select-selection-item {
+  line-height: 24px !important;
+  padding: 0 !important;
+  font-size: 12px !important;
+}
+
+.compact-select .ant-select-selection-placeholder {
+  line-height: 24px !important;
+  font-size: 12px !important;
+}
+
 /* Menu styles - prevent text truncation */
 .ant-menu-item,
 .ant-menu-submenu-title {

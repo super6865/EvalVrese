@@ -403,4 +403,52 @@ export const datasetService = {
     const response = await api.get(`/datasets/${datasetId}/io_jobs`)
     return response.data
   },
+
+  // Export
+  exportDataset: async (datasetId: number, versionId?: number | null, format: string = 'csv') => {
+    const params: any = { format }
+    if (versionId !== null && versionId !== undefined) {
+      params.version_id = versionId
+    }
+    
+    const response = await api.get(`/datasets/${datasetId}/export`, {
+      params,
+      responseType: 'blob',
+    })
+    
+    // Get filename from Content-Disposition header or use provided/default
+    let downloadFileName = `dataset_${datasetId}.${format}`
+    const contentDisposition = response.headers['content-disposition']
+    if (contentDisposition) {
+      // Try to extract filename from RFC 5987 format: filename*=UTF-8''encoded_filename
+      const utf8Match = contentDisposition.match(/filename\*=UTF-8''([^;]+)/)
+      if (utf8Match && utf8Match[1]) {
+        try {
+          downloadFileName = decodeURIComponent(utf8Match[1])
+        } catch (e) {
+          // Fallback to regular filename
+          const fileNameMatch = contentDisposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/)
+          if (fileNameMatch && fileNameMatch[1]) {
+            downloadFileName = fileNameMatch[1].replace(/['"]/g, '')
+          }
+        }
+      } else {
+        // Fallback to regular filename extraction
+        const fileNameMatch = contentDisposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/)
+        if (fileNameMatch && fileNameMatch[1]) {
+          downloadFileName = fileNameMatch[1].replace(/['"]/g, '')
+        }
+      }
+    }
+    
+    // Create download link
+    const url = window.URL.createObjectURL(new Blob([response.data], { type: 'text/csv;charset=utf-8;' }))
+    const link = document.createElement('a')
+    link.href = url
+    link.setAttribute('download', downloadFileName)
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    window.URL.revokeObjectURL(url)
+  },
 }

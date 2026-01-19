@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Button, Table, Space, message, Modal, Tag, Card, Collapse, Checkbox, Empty } from 'antd'
-import { EditOutlined, DeleteOutlined } from '@ant-design/icons'
+import { EditOutlined, DeleteOutlined, DownloadOutlined } from '@ant-design/icons'
 import { datasetService, DatasetItem, FieldSchema, FieldData } from '../../../services/datasetService'
 import { formatTimestamp } from '../../../utils/dateUtils'
 import type { ColumnsType } from 'antd/es/table'
@@ -27,6 +27,7 @@ export default function DatasetItemList({ datasetId, versionId, hasVersion = tru
   const [currentPage, setCurrentPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
   const [total, setTotal] = useState(0)
+  const [downloading, setDownloading] = useState(false)
 
   // Use prop fieldSchemas if provided, otherwise load from API
   const fieldSchemas = propFieldSchemas.length > 0 ? propFieldSchemas : internalFieldSchemas
@@ -163,6 +164,23 @@ export default function DatasetItemList({ datasetId, versionId, hasVersion = tru
         }
       },
     })
+  }
+
+  const handleDownload = async () => {
+    if (!hasVersion || !versionId) {
+      message.warning('请先选择版本')
+      return
+    }
+
+    setDownloading(true)
+    try {
+      await datasetService.exportDataset(datasetId, versionId, 'csv')
+      message.success('下载成功')
+    } catch (error: any) {
+      message.error('下载失败: ' + (error.message || '未知错误'))
+    } finally {
+      setDownloading(false)
+    }
   }
 
   const renderTurnContent = (turns: any[]) => {
@@ -325,14 +343,24 @@ export default function DatasetItemList({ datasetId, versionId, hasVersion = tru
     <div>
       <div className="mb-4 flex justify-between items-center">
         <h3 className="text-lg font-semibold">数据项</h3>
-        {selectedRowKeys.length > 0 && (
+        <Space>
+          {selectedRowKeys.length > 0 && (
+            <Button
+              danger
+              onClick={handleBatchDelete}
+            >
+              批量删除 ({selectedRowKeys.length})
+            </Button>
+          )}
           <Button
-            danger
-            onClick={handleBatchDelete}
+            type="primary"
+            icon={<DownloadOutlined />}
+            loading={downloading}
+            onClick={handleDownload}
           >
-            批量删除 ({selectedRowKeys.length})
+            下载数据集
           </Button>
-        )}
+        </Space>
       </div>
 
       <Table

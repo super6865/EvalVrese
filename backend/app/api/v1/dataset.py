@@ -11,7 +11,10 @@ from app.core.database import get_db
 from app.services.dataset_service import DatasetService
 from app.services.file_service import FileService
 from app.services.dataset_import_service import DatasetImportService
+from app.services.dataset_export_service import DatasetExportService
 from app.utils.api_decorators import handle_api_errors, handle_not_found
+from fastapi.responses import FileResponse
+from urllib.parse import quote
 
 router = APIRouter()
 
@@ -694,3 +697,54 @@ async def list_import_jobs(
             "updated_at": job.updated_at.isoformat() if job.updated_at else None
         } for job in jobs]
     }
+
+
+@router.get("/{dataset_id}/export")
+async def export_dataset(
+    dataset_id: int,
+    version_id: Optional[int] = Query(None, description="Version ID to export (if not provided, exports draft items)"),
+    format: str = Query("csv", description="Export format (currently only 'csv' is supported)"),
+    db: Session = Depends(get_db)
+):
+    """Export dataset items to CSV file"""
+    try:
+        if format != "csv":
+            raise HTTPException(status_code=400, detail=f"Unsupported format: {format}. Only 'csv' is supported.")
+        
+        export_service = DatasetExportService(db)
+        file_path, file_name = export_service.export_dataset_items_csv(
+            dataset_id=dataset_id,
+            version_id=version_id
+        )
+        
+        # Check if file exists
+        file_path_obj = Path(file_path)
+        if not file_path_obj.exists():
+            raise HTTPException(status_code=404, detail=f"Export file not found: {file_path}")
+        
+        # Get filename and handle Chinese characters
+        # Create ASCII-compatible fallback filename (remove non-ASCII characters)
+        fallback_filename = file_name.encode('ascii', 'ignore').decode('ascii') or f"dataset_{dataset_id}.csv"
+        
+        # URL encode the filename for UTF-8 support (RFC 5987)
+        encoded_filename = quote(file_name, safe='')
+        
+        # Set Content-Disposition header with RFC 5987 format
+        # Format: attachment; filename="fallback.csv"; filename*=UTF-8''encoded_filename.csv
+        content_disposition = f'attachment; filename="{fallback_filename}"; filename*=UTF-8\'\'{encoded_filename}'
+        
+        # Return file with proper headers for download
+        return FileResponse(
+            path=str(file_path),
+            media_type="text/csv; charset=utf-8",
+            filename=fallback_filename,  # Fallback for older browsers
+            headers={
+                "Content-Disposition": content_disposition
+            }
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to export dataset: {str(e)}")

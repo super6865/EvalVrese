@@ -7,6 +7,8 @@ import uuid
 import json
 import logging
 from sqlalchemy.orm import Session
+from sqlalchemy import text
+from sqlalchemy.exc import InvalidRequestError, PendingRollbackError
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +93,70 @@ class Span:
     def set_db(self, db: Session):
         self._db = db
     
+    @staticmethod
+    def _is_session_valid(session: Session) -> bool:
+        """Check if database session is in a valid state"""
+        try:
+            # Check if session has an active transaction
+            if not session.is_active:
+                return False
+            
+            # Check if transaction is in prepared state (can't execute SQL)
+            transaction = session.get_transaction()
+            if transaction and hasattr(transaction, '_state'):
+                # Transaction states: None, 'active', 'prepared', 'committed', 'rolled back'
+                state = getattr(transaction, '_state', None)
+                if state == 'prepared':
+                    return False
+            
+            # Try a simple query to verify session is usable
+            session.execute(text("SELECT 1"))
+            return True
+        except (InvalidRequestError, PendingRollbackError) as e:
+            logger.warning(f"[Span] Session validation failed: {type(e).__name__}: {str(e)}")
+            return False
+        except Exception as e:
+            logger.warning(f"[Span] Session validation failed with unexpected error: {type(e).__name__}: {str(e)}")
+            return False
+    
+    @staticmethod
+    def _ensure_session_valid(session: Session) -> bool:
+        """Ensure database session is in a valid state, rollback if needed"""
+        try:
+            # Check if session needs rollback
+            if not session.is_active:
+                try:
+                    session.rollback()
+                    logger.info(f"[Span] Rolled back inactive session")
+                except Exception as e:
+                    logger.warning(f"[Span] Failed to rollback inactive session: {str(e)}")
+                    return False
+            
+            # Check for pending rollback error or prepared state
+            transaction = session.get_transaction()
+            if transaction:
+                # Check if transaction is in prepared state
+                if hasattr(transaction, '_state'):
+                    state = getattr(transaction, '_state', None)
+                    if state == 'prepared':
+                        try:
+                            session.rollback()
+                            logger.info(f"[Span] Rolled back session in prepared state")
+                        except Exception as e:
+                            logger.warning(f"[Span] Failed to rollback prepared session: {str(e)}")
+                            return False
+            
+            # Verify session is now usable
+            try:
+                session.execute(text("SELECT 1"))
+                return True
+            except (InvalidRequestError, PendingRollbackError) as e:
+                logger.warning(f"[Span] Session still invalid after rollback attempt: {type(e).__name__}: {str(e)}")
+                return False
+        except Exception as e:
+            logger.warning(f"[Span] Failed to ensure session validity: {type(e).__name__}: {str(e)}")
+            return False
+    
     def finish(self, end_time: Optional[datetime] = None, db: Optional[Session] = None):
         """
         Finish the span and automatically save to database (following coze-loop's pattern).
@@ -119,6 +185,13 @@ class Span:
         session = db or self._db
         if session:
             try:
+                # Check and ensure session is in a valid state before using it
+                if not self._is_session_valid(session):
+                    logger.warning(f"[Span] Session is invalid, attempting to recover for span {self.span_id}")
+                    if not self._ensure_session_valid(session):
+                        logger.error(f"[Span] ❌ Failed to recover session for span {self.span_id}, skipping auto-save")
+                        return
+                
                 # Lazy import to avoid circular dependency
                 from app.services.observability_service import ObservabilityService
                 
@@ -135,6 +208,16 @@ class Span:
                 else:
                     logger.error(f"[Span] ❌ CRITICAL: save_span returned None! span_id={self.span_id}, name={self.name}")
                     
+            except (InvalidRequestError, PendingRollbackError) as e:
+                logger.error(f"[Span] ❌ Database session error auto-saving span {self.span_id} (name={self.name}, trace_id={self.trace_id}): {type(e).__name__}: {str(e)}")
+                logger.error(f"[Span]   - Exception type: {type(e).__name__}")
+                logger.error(f"[Span]   - Exception args: {e.args}")
+                # Try to recover session for future use
+                try:
+                    self._ensure_session_valid(session)
+                except Exception as recover_error:
+                    logger.warning(f"[Span] Failed to recover session after error: {str(recover_error)}")
+                # Don't raise - span finishing should not fail the operation
             except Exception as e:
                 logger.error(f"[Span] ❌ CRITICAL ERROR auto-saving span {self.span_id} (name={self.name}, trace_id={self.trace_id}): {str(e)}", exc_info=True)
                 logger.error(f"[Span]   - Exception type: {type(e).__name__}")

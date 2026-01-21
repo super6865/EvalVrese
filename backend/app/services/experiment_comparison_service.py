@@ -40,6 +40,7 @@ class ExperimentComparisonService:
         comparison_results = {
             "experiments": [],
             "common_evaluators": [],
+            "all_evaluators": [],
             "comparison_metrics": {}
         }
         
@@ -74,9 +75,20 @@ class ExperimentComparisonService:
                 "aggregate_results": aggregate_results
             })
         
-        # Find common evaluators (evaluators present in all experiments)
+        # Build all evaluators list (not just common ones)
+        all_evaluators = []
         common_evaluators = []
+        
         for ev_id in all_evaluator_ids:
+            # Get evaluator info
+            ev_version = self.db.query(EvaluatorVersion).filter(
+                EvaluatorVersion.id == ev_id
+            ).first()
+            
+            if not ev_version:
+                continue
+            
+            # Check if present in all experiments
             present_in_all = all(
                 any(
                     agg["evaluator_version_id"] == ev_id
@@ -84,21 +96,21 @@ class ExperimentComparisonService:
                 )
                 for exp_data in experiments_data
             )
+            
+            evaluator_info = {
+                "evaluator_version_id": ev_id,
+                "name": ev_version.evaluator.name,
+                "version": ev_version.version,
+                "is_common": present_in_all
+            }
+            
+            all_evaluators.append(evaluator_info)
             if present_in_all:
-                # Get evaluator info
-                ev_version = self.db.query(EvaluatorVersion).filter(
-                    EvaluatorVersion.id == ev_id
-                ).first()
-                if ev_version:
-                    common_evaluators.append({
-                        "evaluator_version_id": ev_id,
-                        "name": ev_version.evaluator.name,
-                        "version": ev_version.version
-                    })
+                common_evaluators.append(evaluator_info)
         
-        # Build comparison metrics for common evaluators
+        # Build comparison metrics for ALL evaluators (not just common ones)
         comparison_metrics = {}
-        for ev_info in common_evaluators:
+        for ev_info in all_evaluators:
             ev_id = ev_info["evaluator_version_id"]
             metrics = {
                 "evaluator": ev_info,
@@ -145,6 +157,7 @@ class ExperimentComparisonService:
         
         comparison_results["experiments"] = experiments_data
         comparison_results["common_evaluators"] = common_evaluators
+        comparison_results["all_evaluators"] = all_evaluators
         comparison_results["comparison_metrics"] = comparison_metrics
         
         return comparison_results
@@ -532,6 +545,7 @@ class ExperimentComparisonService:
         return {
             "evaluator_scores": {
                 "common_evaluators": comparison["common_evaluators"],
+                "all_evaluators": comparison.get("all_evaluators", comparison["common_evaluators"]),
                 "comparison_metrics": comparison["comparison_metrics"]
             },
             "runtime_metrics": {

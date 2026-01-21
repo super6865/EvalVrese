@@ -135,11 +135,23 @@ async def debug_model_set(
     service = ModelSetService(db)
     result = await service.debug_model_set(model_set_id, data.test_data)
     
+    # Always return the result, even if success is False
+    # This allows the frontend to display the target API's error response
+    # Only raise exception for critical errors (e.g., model set not found, invalid config)
     if not result.get('success'):
-        raise HTTPException(
-            status_code=400,
-            detail=result.get('message', 'Debug failed')
-        )
+        # Check if this is a critical error that should be raised as HTTP exception
+        # vs. a target API error that should be returned to the frontend
+        error_type = result.get('error_type') or ''
+        message = result.get('message', 'Debug failed')
+        
+        # Critical errors: model set not found, invalid configuration, etc.
+        if 'not found' in message.lower() or 'required' in message.lower() or 'invalid' in message.lower():
+            raise HTTPException(
+                status_code=400,
+                detail=message
+            )
+        # For target API errors, return the result so frontend can display the error response
+        # This includes cases where the target API returns HTTP 200 but with error code in body
     
     return result
 

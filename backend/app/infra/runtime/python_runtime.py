@@ -3,12 +3,15 @@ Python runtime implementation
 """
 import json
 import time
+import logging
 from typing import Dict, Any, Optional
 from RestrictedPython import compile_restricted
 from RestrictedPython.Guards import safe_builtins
 from app.infra.runtime.runtime import Runtime, ExecutionResult
 from app.utils.code_validator import CodeValidator
 from app.domain.entity.evaluator_types import LanguageType
+
+logger = logging.getLogger(__name__)
 
 
 class EvalOutput:
@@ -108,15 +111,74 @@ class PythonRuntime(Runtime):
             if 'evaluation_result' in restricted_locals:
                 result = restricted_locals['evaluation_result']
                 if isinstance(result, dict):
-                    ret_val = json.dumps(result, ensure_ascii=False)
+                    # Validate that the dict can be serialized to JSON
+                    try:
+                        ret_val = json.dumps(result, ensure_ascii=False)
+                        # Verify the serialized JSON can be parsed back
+                        json.loads(ret_val)
+                    except (TypeError, ValueError, json.JSONDecodeError) as e:
+                        logger.warning(
+                            f"Failed to serialize evaluation_result dict to JSON: {e}. "
+                            f"Result type: {type(result)}, keys: {list(result.keys()) if isinstance(result, dict) else 'N/A'}"
+                        )
+                        # Fallback: try to create a valid dict with string values
+                        try:
+                            safe_result = {
+                                "score": result.get("score") if isinstance(result, dict) else None,
+                                "reason": str(result.get("reason", "")) if isinstance(result, dict) else str(result)
+                            }
+                            ret_val = json.dumps(safe_result, ensure_ascii=False)
+                        except Exception:
+                            ret_val = json.dumps({"score": None, "reason": str(result)}, ensure_ascii=False)
+                elif isinstance(result, str):
+                    # If result is already a string, check if it's valid JSON
+                    try:
+                        json.loads(result)
+                        ret_val = result
+                    except json.JSONDecodeError:
+                        # Not valid JSON, wrap it in a dict
+                        ret_val = json.dumps({"score": None, "reason": result}, ensure_ascii=False)
                 else:
                     ret_val = str(result)
+                    logger.debug(f"evaluation_result is not dict or str, converting to string: {type(result)}")
             elif 'evaluation_result' in restricted_globals:
                 result = restricted_globals['evaluation_result']
                 if isinstance(result, dict):
-                    ret_val = json.dumps(result, ensure_ascii=False)
+                    # Validate that the dict can be serialized to JSON
+                    try:
+                        ret_val = json.dumps(result, ensure_ascii=False)
+                        # Verify the serialized JSON can be parsed back
+                        json.loads(ret_val)
+                    except (TypeError, ValueError, json.JSONDecodeError) as e:
+                        logger.warning(
+                            f"Failed to serialize evaluation_result dict to JSON: {e}. "
+                            f"Result type: {type(result)}, keys: {list(result.keys()) if isinstance(result, dict) else 'N/A'}"
+                        )
+                        # Fallback: try to create a valid dict with string values
+                        try:
+                            safe_result = {
+                                "score": result.get("score") if isinstance(result, dict) else None,
+                                "reason": str(result.get("reason", "")) if isinstance(result, dict) else str(result)
+                            }
+                            ret_val = json.dumps(safe_result, ensure_ascii=False)
+                        except Exception:
+                            ret_val = json.dumps({"score": None, "reason": str(result)}, ensure_ascii=False)
+                elif isinstance(result, str):
+                    # If result is already a string, check if it's valid JSON
+                    try:
+                        json.loads(result)
+                        ret_val = result
+                    except json.JSONDecodeError:
+                        # Not valid JSON, wrap it in a dict
+                        ret_val = json.dumps({"score": None, "reason": result}, ensure_ascii=False)
                 else:
                     ret_val = str(result)
+                    logger.debug(f"evaluation_result is not dict or str, converting to string: {type(result)}")
+            
+            # Log ret_val for debugging (truncated to avoid log spam)
+            if ret_val:
+                preview = ret_val[:200] + ("..." if len(ret_val) > 200 else "")
+                logger.debug(f"Python runtime returning ret_val (preview): {preview}")
             
             return ExecutionResult(
                 stdout=stdout_capture.getvalue(),

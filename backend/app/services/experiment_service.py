@@ -2,6 +2,8 @@
 Experiment service
 """
 from sqlalchemy.orm import Session
+from sqlalchemy import text
+from sqlalchemy.exc import InvalidRequestError, PendingRollbackError
 from typing import List, Optional, Dict, Any, Tuple
 from app.models.experiment import (
     Experiment, ExperimentRun, ExperimentResult, ExperimentStatus,
@@ -119,6 +121,82 @@ class ExperimentService:
         self.result_service = ExperimentResultService(db)
         # Use DatabaseTracer that automatically saves spans (like coze-loop)
         self.tracer = DatabaseTracer(db=db)
+    
+    def _ensure_session_valid(self) -> bool:
+        """Ensure database session is in a valid state, rollback if needed"""
+        try:
+            # Check if session needs rollback
+            if not self.db.is_active:
+                try:
+                    self.db.rollback()
+                    logger.info(f"[ExperimentService] Rolled back inactive session")
+                except Exception as e:
+                    logger.warning(f"[ExperimentService] Failed to rollback inactive session: {str(e)}")
+                    return False
+            
+            # Check for pending rollback error or prepared state
+            transaction = self.db.get_transaction()
+            if transaction:
+                # Check if transaction is in prepared state
+                if hasattr(transaction, '_state'):
+                    state = getattr(transaction, '_state', None)
+                    if state == 'prepared':
+                        try:
+                            self.db.rollback()
+                            logger.info(f"[ExperimentService] Rolled back session in prepared state")
+                        except Exception as e:
+                            logger.warning(f"[ExperimentService] Failed to rollback prepared session: {str(e)}")
+                            return False
+            
+            # Verify session is now usable
+            try:
+                self.db.execute(text("SELECT 1"))
+                return True
+            except (InvalidRequestError, PendingRollbackError) as e:
+                logger.warning(f"[ExperimentService] Session still invalid after rollback attempt: {type(e).__name__}: {str(e)}")
+                return False
+        except Exception as e:
+            logger.warning(f"[ExperimentService] Failed to ensure session validity: {type(e).__name__}: {str(e)}")
+            return False
+    
+    def _safe_commit(self, raise_on_error: bool = False) -> bool:
+        """
+        Safely commit database session, handling invalid states.
+        
+        Args:
+            raise_on_error: If True, raise exception on failure. If False, log error and return False.
+            
+        Returns:
+            True if commit succeeded, False otherwise
+        """
+        try:
+            # Ensure session is valid before committing
+            if not self._ensure_session_valid():
+                if raise_on_error:
+                    raise InvalidRequestError("Session is in invalid state and cannot be recovered")
+                logger.error(f"[ExperimentService] Cannot commit: session is invalid and cannot be recovered")
+                return False
+            
+            # Attempt commit
+            self.db.commit()
+            return True
+        except (InvalidRequestError, PendingRollbackError) as e:
+            logger.error(f"[ExperimentService] Database session error during commit: {type(e).__name__}: {str(e)}")
+            # Try to recover
+            try:
+                self.db.rollback()
+                logger.info(f"[ExperimentService] Rolled back after commit error")
+            except Exception as rollback_error:
+                logger.warning(f"[ExperimentService] Failed to rollback after commit error: {str(rollback_error)}")
+            
+            if raise_on_error:
+                raise
+            return False
+        except Exception as e:
+            logger.error(f"[ExperimentService] Unexpected error during commit: {type(e).__name__}: {str(e)}", exc_info=True)
+            if raise_on_error:
+                raise
+            return False
 
     # Experiment CRUD
     def create_experiment(
@@ -1737,12 +1815,16 @@ class ExperimentService:
                         logger.warning(f"[ExecuteExperiment] Root span not finished, finishing now for trace {trace_id}")
                         self.tracer.finish_span(trace_span, db=self.db)
                     
-                    self.db.commit()
+                    # Use safe commit in finally block (don't raise on error)
+                    self._safe_commit(raise_on_error=False)
                     
                     # Update progress
                     progress = int((idx + 1) * 100 / total_items)
-                    self.update_run_status(run_id, ExperimentStatus.RUNNING, progress=progress)
-                    self.update_experiment_status(experiment_id, ExperimentStatus.RUNNING, progress=progress)
+                    try:
+                        self.update_run_status(run_id, ExperimentStatus.RUNNING, progress=progress)
+                        self.update_experiment_status(experiment_id, ExperimentStatus.RUNNING, progress=progress)
+                    except Exception as progress_error:
+                        logger.warning(f"[ExecuteExperiment] Failed to update progress: {str(progress_error)}")
             
             # Mark as completed
             self.celery_log_service.create_log(
@@ -1756,13 +1838,32 @@ class ExperimentService:
             
         except Exception as e:
             error_msg = f"实验执行失败: {str(e)}"
-            self.celery_log_service.create_log(
-                experiment_id, run_id, task_id, CeleryTaskLogLevel.ERROR,
-                error_msg,
-                "execution_failed"
-            )
-            self.update_run_status(run_id, ExperimentStatus.FAILED, error_message=str(e))
-            self.update_experiment_status(experiment_id, ExperimentStatus.FAILED)
+            # Ensure session is valid before logging and updating status
+            try:
+                self._ensure_session_valid()
+            except Exception as session_error:
+                logger.warning(f"[ExecuteExperiment] Failed to ensure session validity in exception handler: {str(session_error)}")
+            
+            # Try to log error and update status, but don't fail if session is invalid
+            try:
+                self.celery_log_service.create_log(
+                    experiment_id, run_id, task_id, CeleryTaskLogLevel.ERROR,
+                    error_msg,
+                    "execution_failed"
+                )
+            except Exception as log_error:
+                logger.error(f"[ExecuteExperiment] Failed to log error to database: {str(log_error)}")
+            
+            try:
+                self.update_run_status(run_id, ExperimentStatus.FAILED, error_message=str(e))
+            except Exception as status_error:
+                logger.error(f"[ExecuteExperiment] Failed to update run status: {str(status_error)}")
+            
+            try:
+                self.update_experiment_status(experiment_id, ExperimentStatus.FAILED)
+            except Exception as status_error:
+                logger.error(f"[ExecuteExperiment] Failed to update experiment status: {str(status_error)}")
+            
             raise
 
     async def _invoke_evaluation_target(self, config: Dict[str, Any], input_data: Dict[str, Any]) -> str:

@@ -504,12 +504,19 @@ export default function DashboardPage() {
         dataIndex: 'input',
         key: 'input',
         width: 200,
-        ellipsis: true,
-        render: (text: string) => (
-          <Tooltip title={text}>
-            <span>{text || '-'}</span>
-          </Tooltip>
-        ),
+        ellipsis: false,
+        render: (text: string) => {
+          if (!text) return '-'
+          const maxLength = 50
+          const shouldTruncate = text.length > maxLength
+          const displayText = shouldTruncate ? text.substring(0, maxLength) + '...' : text
+          
+          return (
+            <Tooltip title={text} placement="topLeft">
+              <span style={{ cursor: shouldTruncate ? 'pointer' : 'default' }}>{displayText}</span>
+            </Tooltip>
+          )
+        },
       },
       {
         title: 'Reference Output',
@@ -1227,73 +1234,92 @@ export default function DashboardPage() {
         >
           {!evaluatorScoresCollapsed && (
             <>
-              {evaluator_scores.common_evaluators.length > 0 ? (
-                <div className="grid grid-cols-2 gap-4">
-                  {evaluator_scores.common_evaluators.map((ev) => {
-                    const evaluatorMetrics = evaluator_scores.comparison_metrics[ev.evaluator_version_id]
-                    
-                    if (!evaluatorMetrics) {
-                      return (
-                        <Card 
-                          key={ev.evaluator_version_id} 
-                          size="small" 
-                          title={`${ev.name} ${ev.version}`}
-                        >
-                          <Empty description="暂无数据" image={Empty.PRESENTED_IMAGE_SIMPLE} />
-                        </Card>
-                      )
-                    }
-
-                    const aggregation = getEvaluatorAggregationState(ev.evaluator_version_id)
-                    const maxValue = aggregation === 'count' ? undefined : 1
-
-                    return (
-                      <Card
-                        key={ev.evaluator_version_id}
-                        size="small"
-                        title={
-                          <Space>
-                            <span>{ev.name} {ev.version}</span>
-                            <Select
-                              value={aggregation}
-                              onChange={(value) => setEvaluatorAggregationState(ev.evaluator_version_id, value)}
-                              size="small"
-                              style={{ width: 100, height: '24px' }}
-                              className="compact-select"
-                              dropdownStyle={{ 
-                                maxHeight: '120px', 
-                                zIndex: 1050,
-                                padding: '4px 0'
-                              }}
-                              dropdownClassName="aggregation-select-dropdown"
-                              getPopupContainer={() => document.body}
+              {(() => {
+                // Use all_evaluators if available, otherwise fall back to common_evaluators
+                const evaluatorsToShow = evaluator_scores.all_evaluators || evaluator_scores.common_evaluators || []
+                
+                if (evaluatorsToShow.length > 0) {
+                  return (
+                    <div className="grid grid-cols-2 gap-4">
+                      {evaluatorsToShow.map((ev) => {
+                        const evaluatorMetrics = evaluator_scores.comparison_metrics[ev.evaluator_version_id]
+                        
+                        if (!evaluatorMetrics || evaluatorMetrics.experiments.length === 0) {
+                          return (
+                            <Card 
+                              key={ev.evaluator_version_id} 
+                              size="small" 
+                              title={
+                                <Space>
+                                  <span>{ev.name} {ev.version}</span>
+                                  {ev.is_common === false && (
+                                    <Tag color="orange" size="small">部分实验</Tag>
+                                  )}
+                                </Space>
+                              }
                             >
-                              <Option value="avg" style={{ padding: '0 12px', lineHeight: '20px', height: '20px', fontSize: '12px' }}>Avg</Option>
-                              <Option value="max" style={{ padding: '0 12px', lineHeight: '20px', height: '20px', fontSize: '12px' }}>Max</Option>
-                              <Option value="min" style={{ padding: '0 12px', lineHeight: '20px', height: '20px', fontSize: '12px' }}>Min</Option>
-                              <Option value="sum" style={{ padding: '0 12px', lineHeight: '20px', height: '20px', fontSize: '12px' }}>Sum</Option>
-                              <Option value="count" style={{ padding: '0 12px', lineHeight: '20px', height: '20px', fontSize: '12px' }}>Count</Option>
-                            </Select>
-                          </Space>
+                              <Empty description="暂无数据" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+                            </Card>
+                          )
                         }
-                      >
-                        <SimpleBarChart
-                          data={evaluatorMetrics.experiments.map((exp) => ({
-                            name: getExperimentGroupLabel(exp.experiment_id),
-                            value: getEvaluatorAggregatedValue(exp, aggregation),
-                            experimentId: exp.experiment_id,
-                          }))}
-                          maxValue={maxValue}
-                          getColor={getExperimentColor}
-                          currentEvaluatorId={ev.evaluator_version_id}
-                        />
-                      </Card>
-                    )
-                  })}
-                </div>
-              ) : (
-                <Empty description="暂无评估器数据" image={Empty.PRESENTED_IMAGE_SIMPLE} />
-              )}
+
+                        const aggregation = getEvaluatorAggregationState(ev.evaluator_version_id)
+                        const maxValue = aggregation === 'count' ? undefined : 1
+
+                        return (
+                          <Card
+                            key={ev.evaluator_version_id}
+                            size="small"
+                            title={
+                              <Space>
+                                <span>{ev.name} {ev.version}</span>
+                                {ev.is_common === false && (
+                                  <Tag color="orange" size="small">部分实验</Tag>
+                                )}
+                                <Select
+                                  value={aggregation}
+                                  onChange={(value) => setEvaluatorAggregationState(ev.evaluator_version_id, value)}
+                                  size="small"
+                                  style={{ width: 100, height: '24px' }}
+                                  className="compact-select"
+                                  dropdownStyle={{ 
+                                    maxHeight: '120px', 
+                                    zIndex: 1050,
+                                    padding: '4px 0'
+                                  }}
+                                  dropdownClassName="aggregation-select-dropdown"
+                                  getPopupContainer={() => document.body}
+                                >
+                                  <Option value="avg" style={{ padding: '0 12px', lineHeight: '20px', height: '20px', fontSize: '12px' }}>Avg</Option>
+                                  <Option value="max" style={{ padding: '0 12px', lineHeight: '20px', height: '20px', fontSize: '12px' }}>Max</Option>
+                                  <Option value="min" style={{ padding: '0 12px', lineHeight: '20px', height: '20px', fontSize: '12px' }}>Min</Option>
+                                  <Option value="sum" style={{ padding: '0 12px', lineHeight: '20px', height: '20px', fontSize: '12px' }}>Sum</Option>
+                                  <Option value="count" style={{ padding: '0 12px', lineHeight: '20px', height: '20px', fontSize: '12px' }}>Count</Option>
+                                </Select>
+                              </Space>
+                            }
+                          >
+                            <SimpleBarChart
+                              data={evaluatorMetrics.experiments.map((exp) => ({
+                                name: getExperimentGroupLabel(exp.experiment_id),
+                                value: getEvaluatorAggregatedValue(exp, aggregation),
+                                experimentId: exp.experiment_id,
+                              }))}
+                              maxValue={maxValue}
+                              getColor={getExperimentColor}
+                              currentEvaluatorId={ev.evaluator_version_id}
+                            />
+                          </Card>
+                        )
+                      })}
+                    </div>
+                  )
+                } else {
+                  return (
+                    <Empty description="暂无评估器数据" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+                  )
+                }
+              })()}
             </>
           )}
         </Card>

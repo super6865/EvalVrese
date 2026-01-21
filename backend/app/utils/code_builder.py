@@ -2,8 +2,11 @@
 Code builder for code evaluators
 """
 from typing import Dict, Any, Optional
+import logging
 from app.domain.entity.evaluator_entity import EvaluatorInputData
 from app.domain.entity.evaluator_types import LanguageType
+
+logger = logging.getLogger(__name__)
 
 
 class CodeBuilder:
@@ -31,28 +34,68 @@ class CodeBuilder:
         turn_dict = {}
         
         # Extract evaluate_dataset_fields
+        # IMPORTANT: Include all fields even if content is None or text is None
+        # This ensures that expected fields exist in turn_dict, preventing KeyError
         if input_data.evaluate_dataset_fields:
             evaluate_dataset_fields = {}
             for key, content in input_data.evaluate_dataset_fields.items():
+                # Always include the field, even if content is None
                 if content:
+                    # Extract text, use empty string if None to avoid issues
+                    text_value = content.text if (hasattr(content, 'text') and content.text is not None) else ""
+                    # Extract content_type, handle both enum and string types
+                    if hasattr(content, 'content_type') and content.content_type:
+                        # ContentType is a str enum, so we can use str() or .value
+                        content_type_value = content.content_type.value if hasattr(content.content_type, 'value') else str(content.content_type)
+                    else:
+                        content_type_value = 'Text'
                     evaluate_dataset_fields[key] = {
-                        'content_type': content.content_type or 'Text',
-                        'text': content.text if hasattr(content, 'text') else None
+                        'content_type': content_type_value,
+                        'text': text_value
                     }
+                    logger.debug(f"[CodeBuilder] Added evaluate_dataset_fields['{key}']: content_type={content_type_value}, text_length={len(text_value)}")
+                else:
+                    # Content is None, but still include the field with default values
+                    evaluate_dataset_fields[key] = {
+                        'content_type': 'Text',
+                        'text': ""
+                    }
+                    logger.warning(f"[CodeBuilder] Content is None for evaluate_dataset_fields['{key}'], using default values")
             if evaluate_dataset_fields:
                 turn_dict['evaluate_dataset_fields'] = evaluate_dataset_fields
+                logger.debug(f"[CodeBuilder] Built evaluate_dataset_fields with {len(evaluate_dataset_fields)} fields: {list(evaluate_dataset_fields.keys())}")
         
         # Extract evaluate_target_output_fields
+        # IMPORTANT: Include all fields even if content is None or text is None
+        # This ensures that expected fields exist in turn_dict, preventing KeyError
         if input_data.evaluate_target_output_fields:
             evaluate_target_output_fields = {}
             for key, content in input_data.evaluate_target_output_fields.items():
+                # Always include the field, even if content is None
                 if content:
+                    # Extract text, use empty string if None to avoid issues
+                    text_value = content.text if (hasattr(content, 'text') and content.text is not None) else ""
+                    # Extract content_type, handle both enum and string types
+                    if hasattr(content, 'content_type') and content.content_type:
+                        # ContentType is a str enum, so we can use str() or .value
+                        content_type_value = content.content_type.value if hasattr(content.content_type, 'value') else str(content.content_type)
+                    else:
+                        content_type_value = 'Text'
                     evaluate_target_output_fields[key] = {
-                        'content_type': content.content_type or 'Text',
-                        'text': content.text if hasattr(content, 'text') else None
+                        'content_type': content_type_value,
+                        'text': text_value
                     }
+                    logger.debug(f"[CodeBuilder] Added evaluate_target_output_fields['{key}']: content_type={content_type_value}, text_length={len(text_value)}")
+                else:
+                    # Content is None, but still include the field with default values
+                    evaluate_target_output_fields[key] = {
+                        'content_type': 'Text',
+                        'text': ""
+                    }
+                    logger.warning(f"[CodeBuilder] Content is None for evaluate_target_output_fields['{key}'], using default values")
             if evaluate_target_output_fields:
                 turn_dict['evaluate_target_output_fields'] = evaluate_target_output_fields
+                logger.debug(f"[CodeBuilder] Built evaluate_target_output_fields with {len(evaluate_target_output_fields)} fields: {list(evaluate_target_output_fields.keys())}")
         
         # Extract ext
         if input_data.ext:

@@ -1,9 +1,19 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+// @ts-expect-error - vite-plugin-monaco-editor uses CommonJS export
+import monacoEditorPlugin from 'vite-plugin-monaco-editor'
 
 // https://vitejs.dev/config/
 export default defineConfig({
-  plugins: [react()],
+  plugins: [
+    react(),
+    // @ts-expect-error
+    (monacoEditorPlugin.default || monacoEditorPlugin)({
+      publicPath: 'monacoeditorwork',
+      languageWorkers: ['editorWorkerService', 'css', 'html', 'json', 'typescript'],
+      globalAPI: false
+    })
+  ],
   build: {
     rollupOptions: {
       output: {
@@ -17,10 +27,10 @@ export default defineConfig({
             if (id.includes('@ant-design/icons')) {
               return 'antd-icons';
             }
-            // Monaco Editor (代码编辑器)
-            if (id.includes('monaco-editor') || id.includes('@monaco-editor')) {
-              return 'monaco-editor';
-            }
+            // Monaco Editor 由 vite-plugin-monaco-editor 处理，不需要手动分块
+            // if (id.includes('monaco-editor') || id.includes('@monaco-editor')) {
+            //   return 'monaco-editor';
+            // }
             // Excel 处理库
             if (id.includes('xlsx')) {
               return 'xlsx';

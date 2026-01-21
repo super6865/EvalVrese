@@ -1,7 +1,7 @@
 """
 AutoGen helper utilities for LLM invocation
 """
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Tuple
 import json
 import re
 import logging
@@ -873,7 +873,7 @@ class AutoGenTargetInvoker:
                     raise ValueError(f"Unsupported HTTP method: {method}")
                 response.raise_for_status()
                 result = response.json() if response.headers.get('content-type', '').startswith('application/json') else response.text
-                return json.dumps(result) if isinstance(result, dict) else str(result)
+                return json.dumps(result, ensure_ascii=False) if isinstance(result, dict) else str(result)
         except httpx.ConnectError as e:
             raise ValueError(f"Connection error: Failed to connect to {api_url} (method: {method}): {str(e)}")
         except httpx.TimeoutException as e:
@@ -887,34 +887,278 @@ class AutoGenTargetInvoker:
         """Invoke agent API using configured API call"""
         import httpx
         
+        def _recursive_parse_json_strings(obj, path=""):
+            """Recursively parse JSON strings in dictionary or list structures"""
+            if isinstance(obj, dict):
+                for key, value in obj.items():
+                    current_path = f"{path}.{key}" if path else key
+                    if isinstance(value, str) and value.strip():
+                        # Check if the string looks like JSON
+                        stripped = value.strip()
+                        if (stripped.startswith('{') and stripped.endswith('}')) or \
+                           (stripped.startswith('[') and stripped.endswith(']')):
+                            try:
+                                parsed = json.loads(value)
+                                logger.info(f"[InvokeAgentAPI] Recursive post-process: Parsed JSON string at '{current_path}' from string to object")
+                                obj[key] = parsed
+                                # Recursively process the parsed object
+                                _recursive_parse_json_strings(parsed, current_path)
+                            except (json.JSONDecodeError, ValueError):
+                                # Not a valid JSON string, keep as is
+                                logger.debug(f"[InvokeAgentAPI] Recursive post-process: '{current_path}' looks like JSON but failed to parse, keeping as string")
+                                pass
+                    elif isinstance(value, (dict, list)):
+                        # Recursively process nested structures
+                        _recursive_parse_json_strings(value, current_path)
+            elif isinstance(obj, list):
+                for idx, item in enumerate(obj):
+                    current_path = f"{path}[{idx}]"
+                    if isinstance(item, str) and item.strip():
+                        # Check if the string looks like JSON
+                        stripped = item.strip()
+                        if (stripped.startswith('{') and stripped.endswith('}')) or \
+                           (stripped.startswith('[') and stripped.endswith(']')):
+                            try:
+                                parsed = json.loads(item)
+                                logger.info(f"[InvokeAgentAPI] Recursive post-process: Parsed JSON string at '{current_path}' from string to object")
+                                obj[idx] = parsed
+                                # Recursively process the parsed object
+                                _recursive_parse_json_strings(parsed, current_path)
+                            except (json.JSONDecodeError, ValueError):
+                                # Not a valid JSON string, keep as is
+                                logger.debug(f"[InvokeAgentAPI] Recursive post-process: '{current_path}' looks like JSON but failed to parse, keeping as string")
+                                pass
+                    elif isinstance(item, (dict, list)):
+                        # Recursively process nested structures
+                        _recursive_parse_json_strings(item, current_path)
+        
         api_url = api_config.get("api_url")
         api_method = api_config.get("api_method", "POST")
         api_headers = api_config.get("api_headers", {})
         api_body_template = api_config.get("api_body_template", {})
         input_mapping = api_config.get("input_mapping", {})
         
-        # Map input_data to API body
-        api_body = {}
+        logger.info(f"[InvokeAgentAPI] Starting API call with URL: {api_url}, method: {api_method}")
+        logger.info(f"[InvokeAgentAPI] Input data keys: {list(input_data.keys())}")
+        logger.info(f"[InvokeAgentAPI] Input mapping: {json.dumps(input_mapping, ensure_ascii=False)}")
+        logger.info(f"[InvokeAgentAPI] API body template: {json.dumps(api_body_template, ensure_ascii=False, indent=2)}")
+        
+        if not api_url:
+            raise ValueError("API URL is required")
+        
+        # Map input_data to API body using input_mapping
+        mapped_data = {}
         if input_mapping:
             for api_key, input_key in input_mapping.items():
                 if input_key in input_data:
-                    api_body[api_key] = input_data[input_key]
+                    mapped_data[api_key] = input_data[input_key]
         else:
-            api_body = input_data
+            # If no mapping, use input_data directly
+            mapped_data = input_data
         
-        # Apply body template
+        # Pre-process: Detect and parse JSON strings in mapped_data values
+        # This handles cases where input_data contains JSON strings (e.g., from evaluation targets)
+        for key, value in mapped_data.items():
+            if isinstance(value, str) and value.strip():
+                # Check if the string looks like JSON (starts with { or [)
+                stripped = value.strip()
+                if (stripped.startswith('{') and stripped.endswith('}')) or \
+                   (stripped.startswith('[') and stripped.endswith(']')):
+                    try:
+                        parsed = json.loads(value)
+                        logger.info(f"[InvokeAgentAPI] Pre-processed: Parsed JSON string in mapped_data['{key}'] from string to object")
+                        mapped_data[key] = parsed
+                    except (json.JSONDecodeError, ValueError):
+                        # Not a valid JSON string, keep as is
+                        logger.debug(f"[InvokeAgentAPI] Pre-processed: '{key}' looks like JSON but failed to parse, keeping as string")
+                        pass
+        
+        # Build request body from template using JSON string replacement
+        # This approach handles nested structures correctly (e.g., param_map.content)
         if api_body_template:
-            for key, value in api_body_template.items():
-                if isinstance(value, str) and value.startswith("{") and value.endswith("}"):
-                    placeholder = value[1:-1]
-                    if placeholder in api_body:
-                        api_body[key] = api_body[placeholder]
-                elif key not in api_body:
-                    api_body[key] = value
+            logger.info(f"[InvokeAgentAPI] Processing api_body_template with mapped_data keys: {list(mapped_data.keys())}")
+            # Convert template to JSON string
+            body_str = json.dumps(api_body_template, ensure_ascii=False)
+            logger.info(f"[InvokeAgentAPI] Template JSON string (before replacement): {body_str}")
+            logger.info(f"[InvokeAgentAPI] Mapped data values: {json.dumps({k: str(v)[:100] + '...' if len(str(v)) > 100 else str(v) for k, v in mapped_data.items()}, ensure_ascii=False)}")
+            
+            # Replace placeholders with actual values
+            # The placeholder is inside a JSON string value, so we need to replace it carefully
+            # For example: "content": "{content}" should become "content": "actual value"
+            # json.dumps() adds quotes for strings, but since the placeholder is already inside quotes,
+            # we need to remove the outer quotes from json.dumps() result for strings
+            # 
+            # IMPORTANT: We need to detect if the placeholder is inside quotes or not
+            # - If inside quotes: escape the string and remove outer quotes from json.dumps() result
+            # - If not inside quotes: use json.dumps() result directly (for JSON objects/values)
+            def _find_placeholder_context(json_str: str, placeholder: str) -> Tuple[bool, int]:
+                """
+                Find placeholder in JSON string and determine if it's inside quotes.
+                Returns: (is_inside_quotes, position)
+                """
+                pos = json_str.find(placeholder)
+                if pos == -1:
+                    return False, -1
+                
+                # Check if we're inside a string value (between quotes)
+                # Count unescaped quotes before the placeholder
+                quote_count = 0
+                escaped = False
+                for i in range(pos):
+                    char = json_str[i]
+                    if escaped:
+                        escaped = False
+                        continue
+                    if char == '\\':
+                        escaped = True
+                        continue
+                    if char == '"':
+                        quote_count += 1
+                
+                # If odd number of quotes before placeholder, we're inside a string
+                is_inside_quotes = (quote_count % 2 == 1)
+                return is_inside_quotes, pos
+            
+            for key, value in mapped_data.items():
+                placeholder = f"{{{key}}}"
+                if placeholder in body_str:
+                    logger.info(f"[InvokeAgentAPI] Replacing placeholder {placeholder} with value type: {type(value).__name__}")
+                    
+                    # Find all occurrences of the placeholder
+                    placeholder_positions = []
+                    start = 0
+                    while True:
+                        pos = body_str.find(placeholder, start)
+                        if pos == -1:
+                            break
+                        placeholder_positions.append(pos)
+                        start = pos + 1
+                    
+                    # Replace from end to start to maintain positions
+                    for pos in reversed(placeholder_positions):
+                        # Check context for this occurrence
+                        is_inside_quotes, _ = _find_placeholder_context(body_str[:pos + len(placeholder)], placeholder)
+                        
+                        if isinstance(value, str):
+                            if is_inside_quotes:
+                                # Placeholder is inside quotes - escape the string and remove outer quotes
+                                escaped_json = json.dumps(value, ensure_ascii=False)
+                                # Remove outer quotes: "value" -> value (but properly escaped)
+                                if len(escaped_json) >= 2 and escaped_json[0] == '"' and escaped_json[-1] == '"':
+                                    escaped_value = escaped_json[1:-1]
+                                else:
+                                    escaped_value = escaped_json
+                                logger.info(f"[InvokeAgentAPI] Placeholder in quotes - escaped value (first 200 chars): {escaped_value[:200]}...")
+                            else:
+                                # Placeholder is NOT in quotes - treat as JSON value
+                                # If value looks like JSON, try to parse and use as object
+                                value_stripped = value.strip()
+                                if (value_stripped.startswith('{') and value_stripped.endswith('}')) or \
+                                   (value_stripped.startswith('[') and value_stripped.endswith(']')):
+                                    try:
+                                        # Value is JSON - parse it and use json.dumps() to get proper JSON representation
+                                        parsed_value = json.loads(value)
+                                        escaped_value = json.dumps(parsed_value, ensure_ascii=False)
+                                        logger.info(f"[InvokeAgentAPI] Placeholder not in quotes - parsed JSON value")
+                                    except (json.JSONDecodeError, ValueError):
+                                        # Not valid JSON, escape as string
+                                        escaped_json = json.dumps(value, ensure_ascii=False)
+                                        escaped_value = escaped_json
+                                        logger.info(f"[InvokeAgentAPI] Placeholder not in quotes - value not valid JSON, escaped as string")
+                                else:
+                                    # Not JSON-like, escape as string
+                                    escaped_json = json.dumps(value, ensure_ascii=False)
+                                    escaped_value = escaped_json
+                                    logger.info(f"[InvokeAgentAPI] Placeholder not in quotes - escaped as string")
+                            
+                            # Replace this occurrence
+                            body_str = body_str[:pos] + escaped_value + body_str[pos + len(placeholder):]
+                        else:
+                            # For non-string values (dict, list, numbers, booleans, null)
+                            # Need to check if placeholder is inside quotes
+                            if is_inside_quotes:
+                                # Placeholder is inside quotes - need to escape the JSON string
+                                # Serialize the value to JSON, then escape it as a string
+                                value_json = json.dumps(value, ensure_ascii=False)
+                                # Escape the JSON string and remove outer quotes
+                                escaped_json = json.dumps(value_json, ensure_ascii=False)
+                                if len(escaped_json) >= 2 and escaped_json[0] == '"' and escaped_json[-1] == '"':
+                                    escaped_value = escaped_json[1:-1]
+                                else:
+                                    escaped_value = escaped_json
+                                logger.info(f"[InvokeAgentAPI] Non-string value in quotes - escaped JSON (first 200 chars): {escaped_value[:200]}...")
+                                body_str = body_str[:pos] + escaped_value + body_str[pos + len(placeholder):]
+                            else:
+                                # Placeholder is NOT in quotes - use JSON directly
+                                # For numbers, booleans, null, json.dumps() returns the value directly
+                                # For dict/list, json.dumps() returns the JSON object representation
+                                value_json = json.dumps(value, ensure_ascii=False)
+                                logger.info(f"[InvokeAgentAPI] Non-string value not in quotes - JSON: {value_json[:200] if len(value_json) > 200 else value_json}...")
+                                body_str = body_str[:pos] + value_json + body_str[pos + len(placeholder):]
+            
+            logger.info(f"[InvokeAgentAPI] Template JSON string (after replacement): {body_str}")
+            
+            # Parse the final JSON string back to dict
+            try:
+                api_body = json.loads(body_str)
+                logger.info(f"[InvokeAgentAPI] Final api_body keys: {list(api_body.keys()) if isinstance(api_body, dict) else 'not a dict'}")
+                
+                # Post-process: If a field value is a JSON string but should be an object, parse it
+                # Common field names that typically expect JSON objects: paramMap, params, parameters, data, body, etc.
+                json_object_fields = ['paramMap', 'params', 'parameters', 'data', 'body', 'input', 'inputs']
+                if isinstance(api_body, dict):
+                    for field_name in json_object_fields:
+                        if field_name in api_body and isinstance(api_body[field_name], str):
+                            try:
+                                parsed = json.loads(api_body[field_name])
+                                logger.info(f"[InvokeAgentAPI] Parsed {field_name} from JSON string to object")
+                                api_body[field_name] = parsed
+                            except (json.JSONDecodeError, ValueError):
+                                # Not a valid JSON string, keep as is
+                                pass
+                
+                # Recursive post-processing: Check all string values in api_body for JSON strings
+                # Apply recursive parsing to the entire api_body
+                _recursive_parse_json_strings(api_body)
+                
+                logger.info(f"[InvokeAgentAPI] Final api_body: {json.dumps(api_body, ensure_ascii=False, indent=2)}")
+            except json.JSONDecodeError as e:
+                logger.error(f"[InvokeAgentAPI] Failed to parse api_body_template after replacement: {e}")
+                logger.error(f"[InvokeAgentAPI] JSON decode error at position {e.pos}: {e.msg}")
+                logger.error(f"[InvokeAgentAPI] Original template: {json.dumps(api_body_template, ensure_ascii=False, indent=2)}")
+                logger.error(f"[InvokeAgentAPI] Mapped data keys: {list(mapped_data.keys())}")
+                logger.error(f"[InvokeAgentAPI] Mapped data types: {[(k, type(v).__name__, str(v)[:100] + '...' if len(str(v)) > 100 else str(v)) for k, v in mapped_data.items()]}")
+                logger.error(f"[InvokeAgentAPI] Invalid JSON string (first 500 chars): {body_str[:500]}")
+                logger.error(f"[InvokeAgentAPI] Invalid JSON string (around error position): {body_str[max(0, e.pos-50):e.pos+50] if e.pos else 'N/A'}")
+                logger.error(f"[InvokeAgentAPI] Invalid JSON string (full length): {len(body_str)} chars")
+                
+                # Try to provide more helpful error message
+                error_context = body_str[max(0, e.pos-50):e.pos+50] if e.pos else ''
+                error_msg = (
+                    f'Invalid api_body_template after placeholder replacement: {str(e)}. '
+                    f'Error at position {e.pos}: {e.msg}. '
+                    f'Context: {error_context}. '
+                    f'This usually happens when a placeholder value contains JSON that breaks the template structure. '
+                    f'Check if placeholder values need to be escaped or if the template structure is correct.'
+                )
+                logger.error(f"[InvokeAgentAPI] {error_msg}")
+                raise ValueError(error_msg)
+        else:
+            # If no template, use mapped_data directly
+            api_body = mapped_data
+            logger.info(f"[InvokeAgentAPI] No template, using mapped_data directly. Keys: {list(api_body.keys())}")
+            
+            # Apply recursive JSON string parsing even when there's no template
+            _recursive_parse_json_strings(api_body)
         
         # Get timeout from config, default to 120 seconds (increased from 60 to handle slow connections)
         timeout_seconds = api_config.get("timeout", 120.0)
         timeout = httpx.Timeout(timeout_seconds, connect=10.0)
+        
+        # Log the final request details before sending
+        logger.info(f"[InvokeAgentAPI] Sending {api_method} request to {api_url}")
+        logger.debug(f"[InvokeAgentAPI] Request headers: {json.dumps(api_headers, ensure_ascii=False, indent=2)}")
+        logger.debug(f"[InvokeAgentAPI] Request body: {json.dumps(api_body, ensure_ascii=False, indent=2)}")
         
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:
@@ -930,7 +1174,7 @@ class AutoGenTargetInvoker:
                     raise ValueError(f"Unsupported HTTP method: {api_method}")
                 response.raise_for_status()
                 result = response.json() if response.headers.get('content-type', '').startswith('application/json') else response.text
-                return json.dumps(result) if isinstance(result, dict) else str(result)
+                return json.dumps(result, ensure_ascii=False) if isinstance(result, dict) else str(result)
         except httpx.ConnectError as e:
             raise ValueError(f"Connection error: Failed to connect to {api_url} (method: {api_method}): {str(e)}")
         except httpx.TimeoutException as e:

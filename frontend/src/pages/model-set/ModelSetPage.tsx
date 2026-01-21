@@ -73,12 +73,26 @@ export default function ModelSetPage() {
       delete configWithoutApiKey.api_key
     }
     
-    form.setFieldsValue({
+    // Convert JSON fields from objects to formatted strings for textarea display
+    const formValues: Record<string, any> = {
       name: modelSet.name,
       description: modelSet.description,
       type: modelSet.type,
-      ...configWithoutApiKey,
-    })
+    }
+    
+    // Handle agent_api type JSON fields
+    if (modelSet.type === 'agent_api') {
+      formValues.api_url = configWithoutApiKey.api_url || ''
+      formValues.api_method = configWithoutApiKey.api_method || 'POST'
+      formValues.api_headers = safeStringifyJSON(configWithoutApiKey.api_headers)
+      formValues.api_body_template = safeStringifyJSON(configWithoutApiKey.api_body_template)
+      formValues.input_mapping = safeStringifyJSON(configWithoutApiKey.input_mapping)
+    } else {
+      // For llm_model type, keep other fields as is
+      Object.assign(formValues, configWithoutApiKey)
+    }
+    
+    form.setFieldsValue(formValues)
     openModal(modelSet)
   }
 
@@ -143,6 +157,20 @@ export default function ModelSetPage() {
       return JSON.parse(value.trim())
     } catch (e) {
       throw new Error(`无效的 JSON 格式: ${value}`)
+    }
+  }
+
+  const safeStringifyJSON = (value: any): string => {
+    if (value === null || value === undefined) {
+      return ''
+    }
+    if (typeof value === 'string') {
+      return value
+    }
+    try {
+      return JSON.stringify(value, null, 2)
+    } catch (e) {
+      return ''
     }
   }
 

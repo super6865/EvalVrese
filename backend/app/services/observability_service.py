@@ -4,13 +4,56 @@ Observability service
 from sqlalchemy.orm import Session
 from typing import List, Optional, Dict, Any, Tuple
 from datetime import datetime, timedelta
+from sqlalchemy import text
+from sqlalchemy.exc import InvalidRequestError, PendingRollbackError
+import logging
 from app.models.trace import Trace, Span
 from app.infra.tracer.span import Span as TracerSpan
+
+logger = logging.getLogger(__name__)
 
 
 class ObservabilityService:
     def __init__(self, db: Session):
         self.db = db
+    
+    def _ensure_session_valid(self):
+        """Ensure database session is in a valid state"""
+        try:
+            # Check if session needs rollback
+            if hasattr(self.db, 'is_active') and not self.db.is_active:
+                try:
+                    self.db.rollback()
+                    logger.info(f"[ObservabilityService] Rolled back inactive session")
+                except Exception as e:
+                    logger.warning(f"[ObservabilityService] Failed to rollback inactive session: {str(e)}")
+                    return False
+            
+            # Check for pending rollback error or prepared state
+            transaction = self.db.get_transaction()
+            if transaction:
+                # If transaction is in prepared state, rollback
+                if hasattr(transaction, '_state'):
+                    state = getattr(transaction, '_state', None)
+                    if state == 'prepared':
+                        try:
+                            self.db.rollback()
+                            logger.info(f"[ObservabilityService] Rolled back session in prepared state")
+                        except Exception as e:
+                            logger.warning(f"[ObservabilityService] Failed to rollback prepared session: {str(e)}")
+                            return False
+            
+            # Verify session is now usable
+            try:
+                self.db.execute(text("SELECT 1"))
+                return True
+            except (InvalidRequestError, PendingRollbackError) as e:
+                logger.warning(f"[ObservabilityService] Session still invalid after rollback attempt: {type(e).__name__}: {str(e)}")
+                return False
+        except Exception as e:
+            # If rollback fails, log and continue (session might be closed)
+            logger.warning(f"[ObservabilityService] Failed to ensure session validity: {type(e).__name__}: {str(e)}")
+            return False
 
     # Trace management
     def create_trace(self, trace_data: Dict[str, Any]) -> Trace:
@@ -32,8 +75,6 @@ class ObservabilityService:
 
     def get_trace(self, trace_id: str) -> Optional[Trace]:
         """Get trace by trace_id"""
-        import logging
-        logger = logging.getLogger(__name__)
         
         logger.debug(f"[ObservabilityService] get_trace called with trace_id: '{trace_id}' (type: {type(trace_id).__name__}, length: {len(trace_id) if trace_id else 0})")
         
@@ -102,16 +143,46 @@ class ObservabilityService:
 
     def get_span(self, span_id: str) -> Optional[Span]:
         """Get span by span_id"""
-        return self.db.query(Span).filter(Span.span_id == span_id).first()
+        # Ensure session is valid before querying
+        try:
+            self._ensure_session_valid()
+        except Exception as e:
+            logger.warning(f"[ObservabilityService] Failed to ensure session validity in get_span: {str(e)}")
+        
+        try:
+            return self.db.query(Span).filter(Span.span_id == span_id).first()
+        except (InvalidRequestError, PendingRollbackError) as e:
+            logger.error(f"[ObservabilityService] Database session error in get_span: {type(e).__name__}: {str(e)}")
+            # Try to recover and retry once
+            try:
+                self._ensure_session_valid()
+                return self.db.query(Span).filter(Span.span_id == span_id).first()
+            except Exception as retry_error:
+                logger.error(f"[ObservabilityService] Failed to recover session in get_span: {str(retry_error)}")
+                raise
 
     def list_spans(self, trace_id: str) -> List[Span]:
         """List all spans for a trace"""
-        return self.db.query(Span).filter(Span.trace_id == trace_id).order_by(Span.start_time).all()
+        # Ensure session is valid before querying
+        try:
+            self._ensure_session_valid()
+        except Exception as e:
+            logger.warning(f"[ObservabilityService] Failed to ensure session validity in list_spans: {str(e)}")
+        
+        try:
+            return self.db.query(Span).filter(Span.trace_id == trace_id).order_by(Span.start_time).all()
+        except (InvalidRequestError, PendingRollbackError) as e:
+            logger.error(f"[ObservabilityService] Database session error in list_spans: {type(e).__name__}: {str(e)}")
+            # Try to recover and retry once
+            try:
+                self._ensure_session_valid()
+                return self.db.query(Span).filter(Span.trace_id == trace_id).order_by(Span.start_time).all()
+            except Exception as retry_error:
+                logger.error(f"[ObservabilityService] Failed to recover session in list_spans: {str(retry_error)}")
+                raise
 
     def get_trace_with_spans(self, trace_id: str) -> Dict[str, Any]:
         """Get trace with all its spans"""
-        import logging
-        logger = logging.getLogger(__name__)
         
         logger.debug(f"[ObservabilityService] get_trace_with_spans called with trace_id: {trace_id} (type: {type(trace_id).__name__})")
         
@@ -158,8 +229,6 @@ class ObservabilityService:
     
     def batch_create_spans(self, spans_data: List[Dict[str, Any]]) -> List[Span]:
         """Batch create spans with individual error handling"""
-        import logging
-        logger = logging.getLogger(__name__)
         
         spans = []
         successful_spans = []
@@ -313,11 +382,24 @@ class ObservabilityService:
         Returns:
             Saved Span model instance
         """
-        import logging
-        logger = logging.getLogger(__name__)
+        # Ensure session is valid before proceeding
+        try:
+            self._ensure_session_valid()
+        except Exception as e:
+            logger.warning(f"[ObservabilityService] Failed to ensure session validity in save_span: {str(e)}")
         
         # Check if span already exists (avoid duplicate save)
-        existing_span = self.get_span(span.span_id)
+        try:
+            existing_span = self.get_span(span.span_id)
+        except (InvalidRequestError, PendingRollbackError) as e:
+            logger.error(f"[ObservabilityService] Database session error in save_span (get_span): {type(e).__name__}: {str(e)}")
+            # Try to recover and retry once
+            try:
+                self._ensure_session_valid()
+                existing_span = self.get_span(span.span_id)
+            except Exception as retry_error:
+                logger.error(f"[ObservabilityService] Failed to recover session in save_span (get_span): {str(retry_error)}")
+                raise
         if existing_span:
             logger.debug(f"[ObservabilityService] Span {span.span_id} already exists, skipping save")
             return existing_span
@@ -360,6 +442,12 @@ class ObservabilityService:
         
         # Save span with error handling for unique constraint
         try:
+            # Ensure session is still valid before creating span
+            try:
+                self._ensure_session_valid()
+            except Exception as e:
+                logger.warning(f"[ObservabilityService] Failed to ensure session validity before create_span: {str(e)}")
+            
             span_data = span.to_dict()
             span_data["trace_id"] = span.trace_id
             logger.info(f"[ObservabilityService] 🔄 Attempting to save span: span_id={span.span_id}, name={span.name}, trace_id={span.trace_id}, parent_span_id={span.parent_span_id}")
@@ -384,17 +472,52 @@ class ObservabilityService:
                 logger.error(f"[ObservabilityService] ❌ CRITICAL: create_span returned None! span_id={span.span_id}")
                 return None
                 
+        except (InvalidRequestError, PendingRollbackError) as e:
+            logger.error(f"[ObservabilityService] ❌ Database session error saving span {span.span_id}: {type(e).__name__}: {str(e)}")
+            # Try to recover and retry once
+            try:
+                self._ensure_session_valid()
+                # Retry saving the span
+                span_data = span.to_dict()
+                span_data["trace_id"] = span.trace_id
+                saved_span = self.create_span(span_data)
+                if saved_span:
+                    logger.info(f"[ObservabilityService] ✅ Successfully saved span {span.span_id} after session recovery")
+                    return saved_span
+            except Exception as retry_error:
+                logger.error(f"[ObservabilityService] Failed to recover session and retry: {str(retry_error)}")
+            # If recovery failed, check if it's a unique constraint (span might have been saved before error)
+            try:
+                existing = self.get_span(span.span_id)
+                if existing:
+                    logger.info(f"[ObservabilityService] ✅ Found existing span {span.span_id} after session error (db_id={existing.id if hasattr(existing, 'id') else 'N/A'})")
+                    return existing
+            except Exception:
+                pass
+            # Re-raise if we couldn't recover
+            raise
         except Exception as e:
             # Check if it's a unique constraint violation
             error_str = str(e).lower()
             if "unique" in error_str or "duplicate" in error_str:
                 logger.warning(f"[ObservabilityService] ⚠️ Span {span.span_id} already exists (unique constraint), fetching existing")
-                existing = self.get_span(span.span_id)
-                if existing:
-                    logger.info(f"[ObservabilityService] ✅ Found existing span {span.span_id} in database (db_id={existing.id if hasattr(existing, 'id') else 'N/A'})")
-                    return existing
-                else:
-                    logger.error(f"[ObservabilityService] ❌ CRITICAL: Unique constraint error but span {span.span_id} not found in database!")
+                try:
+                    existing = self.get_span(span.span_id)
+                    if existing:
+                        logger.info(f"[ObservabilityService] ✅ Found existing span {span.span_id} in database (db_id={existing.id if hasattr(existing, 'id') else 'N/A'})")
+                        return existing
+                    else:
+                        logger.error(f"[ObservabilityService] ❌ CRITICAL: Unique constraint error but span {span.span_id} not found in database!")
+                except (InvalidRequestError, PendingRollbackError) as get_error:
+                    logger.error(f"[ObservabilityService] Database session error fetching existing span: {type(get_error).__name__}: {str(get_error)}")
+                    # Try to recover
+                    try:
+                        self._ensure_session_valid()
+                        existing = self.get_span(span.span_id)
+                        if existing:
+                            return existing
+                    except Exception:
+                        pass
             # Re-raise if it's a different error
             logger.error(f"[ObservabilityService] ❌ ERROR saving span {span.span_id}: {str(e)}", exc_info=True)
             logger.error(f"[ObservabilityService]   - Exception type: {type(e).__name__}")
@@ -403,8 +526,6 @@ class ObservabilityService:
     
     def save_trace_and_spans(self, trace_data: Dict[str, Any], spans: List[TracerSpan]) -> Trace:
         """Save a trace and its spans to database"""
-        import logging
-        logger = logging.getLogger(__name__)
         
         trace_id = trace_data.get('trace_id')
         logger.info(f"[ObservabilityService] ========== Saving trace {trace_id} with {len(spans)} spans ==========")

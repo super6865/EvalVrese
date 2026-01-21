@@ -26,6 +26,102 @@ from app.infra.runtime.runtime_manager import RuntimeManager
 from datetime import datetime
 import json
 import uuid
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+def _safe_parse_evaluator_result(ret_val: str) -> Dict[str, Any]:
+    """
+    安全解析评估器返回的 JSON 结果
+    
+    处理以下情况：
+    1. 正常的 JSON 对象
+    2. 包含多个 JSON 对象（提取第一个）
+    3. 双重编码的 JSON 字符串
+    4. 混合了 JSON 和其他文本的内容
+    
+    Args:
+        ret_val: 评估器返回的字符串值
+        
+    Returns:
+        解析后的字典，如果解析失败则返回包含原始值的字典
+    """
+    if not ret_val:
+        return {}
+    
+    ret_val = ret_val.strip()
+    if not ret_val:
+        return {}
+    
+    # 尝试直接解析
+    try:
+        return json.loads(ret_val)
+    except json.JSONDecodeError as e:
+        # 记录原始错误信息
+        error_type = type(e).__name__
+        error_pos = getattr(e, 'pos', None)
+        error_msg = str(e)
+        
+        # 尝试提取第一个有效的 JSON 对象
+        # 查找第一个 '{' 和对应的 '}'
+        start_idx = ret_val.find('{')
+        if start_idx != -1:
+            # 从第一个 '{' 开始，尝试找到匹配的 '}'
+            brace_count = 0
+            end_idx = start_idx
+            for i in range(start_idx, len(ret_val)):
+                if ret_val[i] == '{':
+                    brace_count += 1
+                elif ret_val[i] == '}':
+                    brace_count -= 1
+                    if brace_count == 0:
+                        end_idx = i + 1
+                        break
+            
+            if end_idx > start_idx:
+                json_candidate = ret_val[start_idx:end_idx]
+                try:
+                    parsed = json.loads(json_candidate)
+                    logger.warning(
+                        f"Extracted JSON from position {start_idx}-{end_idx}. "
+                        f"Original error: {error_type} at position {error_pos}: {error_msg}. "
+                        f"Original ret_val preview: {ret_val[:200]}"
+                    )
+                    return parsed
+                except json.JSONDecodeError:
+                    pass
+        
+        # 尝试处理双重编码的情况
+        # 如果 ret_val 看起来像是一个 JSON 字符串（以引号开头和结尾）
+        if ret_val.startswith('"') and ret_val.endswith('"'):
+            try:
+                # 先解析外层的 JSON 字符串
+                unescaped = json.loads(ret_val)
+                if isinstance(unescaped, str):
+                    # 再次尝试解析内层
+                    try:
+                        return json.loads(unescaped)
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+            except json.JSONDecodeError:
+                pass
+        
+        # 所有解析尝试都失败，返回包含错误信息的字典
+        error_preview = ret_val[:200] + ("..." if len(ret_val) > 200 else "")
+        logger.error(
+            f"Failed to parse evaluator result as JSON. "
+            f"Error: {error_type} at position {error_pos}: {error_msg}. "
+            f"ret_val preview: {error_preview}"
+        )
+        
+        return {
+            "score": None,
+            "reason": (
+                f"评估器返回结果解析失败: {error_msg}. "
+                f"返回内容预览: {error_preview}"
+            )
+        }
 
 
 class EvaluatorService:
@@ -587,11 +683,7 @@ class EvaluatorService:
             )
         
         # Parse evaluation result
-        try:
-            import json
-            eval_result = json.loads(result.ret_val) if result.ret_val else {}
-        except:
-            eval_result = {"score": None, "reason": result.ret_val}
+        eval_result = _safe_parse_evaluator_result(result.ret_val) if result.ret_val else {}
         
         evaluator_result = EvaluatorResult(
             score=eval_result.get("score"),
@@ -751,11 +843,7 @@ class EvaluatorService:
             )
         
         # Parse evaluation result
-        try:
-            import json
-            eval_result = json.loads(result.ret_val) if result.ret_val else {}
-        except:
-            eval_result = {"score": None, "reason": result.ret_val}
+        eval_result = _safe_parse_evaluator_result(result.ret_val) if result.ret_val else {}
         
         evaluator_result = EvaluatorResult(
             score=eval_result.get("score"),
@@ -877,11 +965,7 @@ class EvaluatorService:
             )
         
         # Parse evaluation result
-        try:
-            import json
-            eval_result = json.loads(result.ret_val) if result.ret_val else {}
-        except:
-            eval_result = {"score": None, "reason": result.ret_val}
+        eval_result = _safe_parse_evaluator_result(result.ret_val) if result.ret_val else {}
         
         evaluator_result = EvaluatorResult(
             score=eval_result.get("score"),

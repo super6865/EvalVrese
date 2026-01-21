@@ -3,6 +3,8 @@ Experiment execution tasks
 """
 from celery import Task
 from sqlalchemy.orm import Session
+from sqlalchemy import text
+from sqlalchemy.exc import InvalidRequestError, PendingRollbackError
 from app.core.database import SessionLocal
 from app.tasks.celery_app import celery_app
 from app.services.experiment_service import ExperimentService
@@ -104,13 +106,51 @@ def execute_experiment_task(self, experiment_id: int, run_id: int):
         logger.error(f"========== Experiment execution failed ==========")
         logger.error(f"Error: {str(e)}", exc_info=True)
         
-        # Log error to database
-        _log_to_db(db, experiment_id, run_id, task_id, CeleryTaskLogLevel.ERROR, 
-                  error_msg, "task_failed")
+        # Try to recover database session if it's in invalid state
+        try:
+            # Check if session is in invalid state
+            if not db.is_active:
+                db.rollback()
+                logger.info(f"[ExperimentTask] Rolled back inactive session")
+            else:
+                transaction = db.get_transaction()
+                if transaction and hasattr(transaction, '_state'):
+                    state = getattr(transaction, '_state', None)
+                    if state == 'prepared':
+                        db.rollback()
+                        logger.info(f"[ExperimentTask] Rolled back session in prepared state")
+        except Exception as session_error:
+            logger.warning(f"[ExperimentTask] Failed to recover session: {str(session_error)}")
+            # Try to create a new session if recovery failed
+            try:
+                db.close()
+                db = SessionLocal()
+                logger.info(f"[ExperimentTask] Created new database session after recovery failure")
+            except Exception as new_session_error:
+                logger.error(f"[ExperimentTask] Failed to create new session: {str(new_session_error)}")
         
-        # Update experiment status to failed
-        service = ExperimentService(db)
-        service.update_experiment_status(experiment_id, ExperimentStatus.FAILED, error_message=str(e))
+        # Log error to database (with error handling)
+        try:
+            _log_to_db(db, experiment_id, run_id, task_id, CeleryTaskLogLevel.ERROR, 
+                      error_msg, "task_failed")
+        except Exception as log_error:
+            logger.error(f"[ExperimentTask] Failed to log error to database: {str(log_error)}")
+        
+        # Update experiment status to failed (with error handling)
+        try:
+            service = ExperimentService(db)
+            service.update_experiment_status(experiment_id, ExperimentStatus.FAILED, error_message=str(e))
+        except Exception as status_error:
+            logger.error(f"[ExperimentTask] Failed to update experiment status: {str(status_error)}")
+            # Try one more time with a fresh session
+            try:
+                db.close()
+                db = SessionLocal()
+                service = ExperimentService(db)
+                service.update_experiment_status(experiment_id, ExperimentStatus.FAILED, error_message=str(e))
+            except Exception as retry_error:
+                logger.error(f"[ExperimentTask] Failed to update experiment status with new session: {str(retry_error)}")
+        
         raise
     finally:
         # Remove handler and clear context
@@ -119,8 +159,13 @@ def execute_experiment_task(self, experiment_id: int, run_id: int):
                 log.removeHandler(log_handler)
         log_handler.clear_context()
         
-        db.close()
-        logger.info(f"Database session closed")
+        # Safely close database session
+        try:
+            if db:
+                db.close()
+                logger.info(f"Database session closed")
+        except Exception as close_error:
+            logger.warning(f"Error closing database session: {str(close_error)}")
 
 
 @celery_app.task(bind=True, base=DatabaseTask)

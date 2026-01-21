@@ -314,32 +314,235 @@ class ModelSetService:
         api_body_template = config.get('api_body_template', {})
         input_mapping = config.get('input_mapping', {})
         
+        logger.info(f"[DebugAgentAPI] Starting debug with URL: {api_url}, method: {api_method}")
+        logger.info(f"[DebugAgentAPI] Test data keys: {list(test_data.keys())}")
+        logger.info(f"[DebugAgentAPI] Input mapping: {json.dumps(input_mapping, ensure_ascii=False)}")
+        logger.info(f"[DebugAgentAPI] API body template: {json.dumps(api_body_template, ensure_ascii=False, indent=2)}")
+        
         if not api_url:
+            logger.error("[DebugAgentAPI] API URL is required but not provided")
             return {
                 'success': False,
                 'message': 'API URL is required'
             }
         
         # Map test data to API body using input_mapping
-        api_body = {}
+        mapped_data = {}
         if input_mapping:
             for api_key, test_key in input_mapping.items():
                 if test_key in test_data:
-                    api_body[api_key] = test_data[test_key]
+                    mapped_data[api_key] = test_data[test_key]
         else:
             # If no mapping, use test_data directly
-            api_body = test_data
+            mapped_data = test_data
         
-        # Replace placeholders in body template
+        # Build request body from template using JSON string replacement
+        # This approach handles nested structures correctly (e.g., param_map.content)
         if api_body_template:
-            for key, value in api_body_template.items():
-                if isinstance(value, str) and value.startswith('{') and value.endswith('}'):
-                    # Replace placeholder with mapped value
-                    placeholder = value[1:-1]
-                    if placeholder in api_body:
-                        api_body[key] = api_body[placeholder]
-                elif key not in api_body:
-                    api_body[key] = value
+            logger.info(f"[DebugAgentAPI] Processing api_body_template with mapped_data keys: {list(mapped_data.keys())}")
+            # Convert template to JSON string
+            body_str = json.dumps(api_body_template, ensure_ascii=False)
+            logger.info(f"[DebugAgentAPI] Template JSON string (before replacement): {body_str}")
+            logger.info(f"[DebugAgentAPI] Mapped data values: {json.dumps({k: str(v)[:100] + '...' if len(str(v)) > 100 else str(v) for k, v in mapped_data.items()}, ensure_ascii=False)}")
+            
+            # Replace placeholders with actual values
+            # The placeholder is inside a JSON string value, so we need to replace it carefully
+            # For example: "content": "{content}" should become "content": "actual value"
+            # json.dumps() adds quotes for strings, but since the placeholder is already inside quotes,
+            # we need to remove the outer quotes from json.dumps() result for strings
+            # 
+            # IMPORTANT: We need to detect if the placeholder is inside quotes or not
+            # - If inside quotes: escape the string and remove outer quotes from json.dumps() result
+            # - If not inside quotes: use json.dumps() result directly (for JSON objects/values)
+            def _find_placeholder_context(json_str: str, placeholder: str) -> tuple:
+                """
+                Find placeholder in JSON string and determine if it's inside quotes.
+                Returns: (is_inside_quotes, position)
+                """
+                pos = json_str.find(placeholder)
+                if pos == -1:
+                    return False, -1
+                
+                # Check if we're inside a string value (between quotes)
+                # Count unescaped quotes before the placeholder
+                quote_count = 0
+                escaped = False
+                for i in range(pos):
+                    char = json_str[i]
+                    if escaped:
+                        escaped = False
+                        continue
+                    if char == '\\':
+                        escaped = True
+                        continue
+                    if char == '"':
+                        quote_count += 1
+                
+                # If odd number of quotes before placeholder, we're inside a string
+                is_inside_quotes = (quote_count % 2 == 1)
+                return is_inside_quotes, pos
+            
+            for key, value in mapped_data.items():
+                placeholder = f"{{{key}}}"
+                if placeholder in body_str:
+                    logger.info(f"[DebugAgentAPI] Replacing placeholder {placeholder} with value type: {type(value).__name__}")
+                    
+                    # Find all occurrences of the placeholder
+                    placeholder_positions = []
+                    start = 0
+                    while True:
+                        pos = body_str.find(placeholder, start)
+                        if pos == -1:
+                            break
+                        placeholder_positions.append(pos)
+                        start = pos + 1
+                    
+                    # Replace from end to start to maintain positions
+                    for pos in reversed(placeholder_positions):
+                        # Check context for this occurrence
+                        is_inside_quotes, _ = _find_placeholder_context(body_str[:pos + len(placeholder)], placeholder)
+                        
+                        if isinstance(value, str):
+                            if is_inside_quotes:
+                                # Placeholder is inside quotes - escape the string and remove outer quotes
+                                escaped_json = json.dumps(value, ensure_ascii=False)
+                                # Remove outer quotes: "value" -> value (but properly escaped)
+                                if len(escaped_json) >= 2 and escaped_json[0] == '"' and escaped_json[-1] == '"':
+                                    escaped_value = escaped_json[1:-1]
+                                else:
+                                    escaped_value = escaped_json
+                                logger.info(f"[DebugAgentAPI] Placeholder in quotes - escaped value (first 200 chars): {escaped_value[:200]}...")
+                            else:
+                                # Placeholder is NOT in quotes - treat as JSON value
+                                # If value looks like JSON, try to parse and use as object
+                                value_stripped = value.strip()
+                                if (value_stripped.startswith('{') and value_stripped.endswith('}')) or \
+                                   (value_stripped.startswith('[') and value_stripped.endswith(']')):
+                                    try:
+                                        # Value is JSON - parse it and use json.dumps() to get proper JSON representation
+                                        parsed_value = json.loads(value)
+                                        escaped_value = json.dumps(parsed_value, ensure_ascii=False)
+                                        logger.info(f"[DebugAgentAPI] Placeholder not in quotes - parsed JSON value")
+                                    except (json.JSONDecodeError, ValueError):
+                                        # Not valid JSON, escape as string
+                                        escaped_json = json.dumps(value, ensure_ascii=False)
+                                        escaped_value = escaped_json
+                                        logger.info(f"[DebugAgentAPI] Placeholder not in quotes - value not valid JSON, escaped as string")
+                                else:
+                                    # Not JSON-like, escape as string
+                                    escaped_json = json.dumps(value, ensure_ascii=False)
+                                    escaped_value = escaped_json
+                                    logger.info(f"[DebugAgentAPI] Placeholder not in quotes - escaped as string")
+                            
+                            # Replace this occurrence
+                            body_str = body_str[:pos] + escaped_value + body_str[pos + len(placeholder):]
+                        else:
+                            # For non-string values (dict, list, numbers, booleans, null)
+                            # Need to check if placeholder is inside quotes
+                            if is_inside_quotes:
+                                # Placeholder is inside quotes - need to escape the JSON string
+                                # Serialize the value to JSON, then escape it as a string
+                                value_json = json.dumps(value, ensure_ascii=False)
+                                # Escape the JSON string and remove outer quotes
+                                escaped_json = json.dumps(value_json, ensure_ascii=False)
+                                if len(escaped_json) >= 2 and escaped_json[0] == '"' and escaped_json[-1] == '"':
+                                    escaped_value = escaped_json[1:-1]
+                                else:
+                                    escaped_value = escaped_json
+                                logger.info(f"[DebugAgentAPI] Non-string value in quotes - escaped JSON (first 200 chars): {escaped_value[:200]}...")
+                                body_str = body_str[:pos] + escaped_value + body_str[pos + len(placeholder):]
+                            else:
+                                # Placeholder is NOT in quotes - use JSON directly
+                                # For numbers, booleans, null, json.dumps() returns the value directly
+                                # For dict/list, json.dumps() returns the JSON object representation
+                                value_json = json.dumps(value, ensure_ascii=False)
+                                logger.info(f"[DebugAgentAPI] Non-string value not in quotes - JSON: {value_json[:200] if len(value_json) > 200 else value_json}...")
+                                body_str = body_str[:pos] + value_json + body_str[pos + len(placeholder):]
+            
+            logger.info(f"[DebugAgentAPI] Template JSON string (after replacement): {body_str}")
+            
+            # Parse the final JSON string back to dict
+            try:
+                api_body = json.loads(body_str)
+                logger.info(f"[DebugAgentAPI] Final api_body keys: {list(api_body.keys()) if isinstance(api_body, dict) else 'not a dict'}")
+                
+                # Post-process: If a field value is a JSON string but should be an object, parse it
+                # Common field names that typically expect JSON objects: paramMap, params, parameters, data, body, etc.
+                json_object_fields = ['paramMap', 'params', 'parameters', 'data', 'body', 'input', 'inputs', 'inputs_content', 'content']
+                if isinstance(api_body, dict):
+                    # First, check known field names
+                    for field_name in json_object_fields:
+                        if field_name in api_body and isinstance(api_body[field_name], str):
+                            try:
+                                parsed = json.loads(api_body[field_name])
+                                logger.info(f"[DebugAgentAPI] Parsed {field_name} from JSON string to object")
+                                api_body[field_name] = parsed
+                            except (json.JSONDecodeError, ValueError):
+                                # Not a valid JSON string, keep as is
+                                logger.debug(f"[DebugAgentAPI] Field {field_name} is not a valid JSON string, keeping as is")
+                                pass
+                    
+                    # Then, check all string fields that look like JSON
+                    # This helps catch fields that might be JSON strings but aren't in the known list
+                    for field_name, field_value in api_body.items():
+                        if isinstance(field_value, str) and field_name not in json_object_fields:
+                            # Check if the string looks like JSON (starts with { or [)
+                            stripped = field_value.strip()
+                            if (stripped.startswith('{') and stripped.endswith('}')) or \
+                               (stripped.startswith('[') and stripped.endswith(']')):
+                                try:
+                                    parsed = json.loads(field_value)
+                                    logger.info(f"[DebugAgentAPI] Parsed {field_name} (detected as JSON string) from JSON string to object")
+                                    api_body[field_name] = parsed
+                                except (json.JSONDecodeError, ValueError):
+                                    # Not a valid JSON string, keep as is
+                                    logger.debug(f"[DebugAgentAPI] Field {field_name} looks like JSON but is not valid, keeping as is")
+                                pass
+                
+                logger.info(f"[DebugAgentAPI] Final api_body: {json.dumps(api_body, ensure_ascii=False, indent=2)}")
+            except json.JSONDecodeError as e:
+                logger.error(f"[DebugAgentAPI] Failed to parse api_body_template after replacement: {e}")
+                logger.error(f"[DebugAgentAPI] JSON decode error at position {e.pos}: {e.msg}")
+                logger.error(f"[DebugAgentAPI] Original template: {json.dumps(api_body_template, ensure_ascii=False, indent=2)}")
+                logger.error(f"[DebugAgentAPI] Mapped data keys: {list(mapped_data.keys())}")
+                logger.error(f"[DebugAgentAPI] Mapped data types: {[(k, type(v).__name__, str(v)[:100] + '...' if len(str(v)) > 100 else str(v)) for k, v in mapped_data.items()]}")
+                logger.error(f"[DebugAgentAPI] Invalid JSON string (first 500 chars): {body_str[:500]}")
+                logger.error(f"[DebugAgentAPI] Invalid JSON string (around error position): {body_str[max(0, e.pos-50):e.pos+50] if e.pos else 'N/A'}")
+                logger.error(f"[DebugAgentAPI] Invalid JSON string (full length): {len(body_str)} chars")
+                
+                # Try to provide more helpful error message
+                error_context = body_str[max(0, e.pos-50):e.pos+50] if e.pos else ''
+                error_msg = (
+                    f'Invalid api_body_template after placeholder replacement: {str(e)}. '
+                    f'Error at position {e.pos}: {e.msg}. '
+                    f'Context: {error_context}. '
+                    f'This usually happens when a placeholder value contains JSON that breaks the template structure. '
+                    f'Check if placeholder values need to be escaped or if the template structure is correct.'
+                )
+                logger.error(f"[DebugAgentAPI] {error_msg}")
+                return {
+                    'success': False,
+                    'message': error_msg,
+                    'error_details': {
+                        'json_error': str(e),
+                        'error_position': e.pos,
+                        'error_message': e.msg,
+                        'template_before': json.dumps(api_body_template, ensure_ascii=False, indent=2),
+                        'json_after_first_500': body_str[:500],
+                        'json_after_around_error': body_str[max(0, e.pos-50):e.pos+50] if e.pos else 'N/A',
+                        'mapped_data_keys': list(mapped_data.keys()),
+                        'mapped_data_types': [(k, type(v).__name__) for k, v in mapped_data.items()]
+                    }
+                }
+        else:
+            # If no template, use mapped_data directly
+            api_body = mapped_data
+            logger.info(f"[DebugAgentAPI] No template, using mapped_data directly. Keys: {list(api_body.keys())}")
+        
+        # Log the final request details before sending
+        logger.info(f"[DebugAgentAPI] Sending {api_method} request to {api_url}")
+        logger.debug(f"[DebugAgentAPI] Request headers: {json.dumps(api_headers, ensure_ascii=False, indent=2)}")
+        logger.debug(f"[DebugAgentAPI] Request body: {json.dumps(api_body, ensure_ascii=False, indent=2)}")
         
         try:
             async with httpx.AsyncClient(timeout=60.0) as client:
@@ -352,27 +555,116 @@ class ModelSetService:
                 elif api_method.upper() == 'PATCH':
                     response = await client.patch(api_url, json=api_body, headers=api_headers)
                 else:
+                    logger.error(f"[DebugAgentAPI] Unsupported HTTP method: {api_method}")
                     return {
                         'success': False,
                         'message': f'Unsupported HTTP method: {api_method}'
                     }
                 
-                response.raise_for_status()
-                result = response.json() if response.headers.get('content-type', '').startswith('application/json') else response.text
+                logger.info(f"[DebugAgentAPI] Response status: {response.status_code}")
                 
+                # Parse response body first (before checking HTTP status)
+                # This allows us to check for business-level errors even when HTTP status is 200
+                try:
+                    result = response.json() if response.headers.get('content-type', '').startswith('application/json') else response.text
+                except Exception as parse_error:
+                    # If response body parsing fails, check HTTP status
+                    if not (200 <= response.status_code < 300):
+                        error_msg = f'HTTP {response.status_code} error: Failed to parse response body'
+                        logger.error(f"[DebugAgentAPI] {error_msg}")
+                        return {
+                            'success': False,
+                            'message': error_msg,
+                            'error': str(parse_error),
+                            'status_code': response.status_code,
+                            'response': response.text[:500] if hasattr(response, 'text') else None
+                        }
+                    # If HTTP status is 2xx but parsing failed, return error
+                    logger.error(f"[DebugAgentAPI] Failed to parse response body: {str(parse_error)}")
+                    return {
+                        'success': False,
+                        'message': f'Failed to parse response body: {str(parse_error)}',
+                        'error': str(parse_error),
+                        'status_code': response.status_code,
+                        'response': response.text[:500] if hasattr(response, 'text') else None
+                    }
+                
+                # Check for business-level errors in response (even if HTTP status is 200)
+                # Some APIs return HTTP 200 but include error codes in the response body
+                if isinstance(result, dict):
+                    error_code = result.get('code')
+                    error_msg = result.get('msg') or result.get('message')
+                    
+                    # Check if response indicates an error (common patterns: code != 0, code >= 4000, or has error message)
+                    if error_code is not None and (error_code != 0 and error_code != 200):
+                        logger.error(f"[DebugAgentAPI] Business error in response: code={error_code}, msg={error_msg}")
+                        logger.error(f"[DebugAgentAPI] Full response: {json.dumps(result, ensure_ascii=False)}")
+                        return {
+                            'success': False,
+                            'message': f'API returned business error: {error_msg or f"Error code {error_code}"}',
+                            'response': result,
+                            'status_code': response.status_code,
+                            'error_code': error_code,
+                            'error_message': error_msg
+                        }
+                    elif error_msg and ('error' in error_msg.lower() or '异常' in error_msg or '失败' in error_msg):
+                        # Also check for error keywords in message
+                        logger.error(f"[DebugAgentAPI] Error message detected in response: {error_msg}")
+                        logger.error(f"[DebugAgentAPI] Full response: {json.dumps(result, ensure_ascii=False)}")
+                        return {
+                            'success': False,
+                            'message': f'API returned error: {error_msg}',
+                            'response': result,
+                            'status_code': response.status_code,
+                            'error_message': error_msg
+                        }
+                
+                # If no business errors detected, check HTTP status code
+                if not (200 <= response.status_code < 300):
+                    error_msg = f'HTTP {response.status_code} error'
+                    logger.error(f"[DebugAgentAPI] {error_msg}")
+                    return {
+                        'success': False,
+                        'message': error_msg,
+                        'status_code': response.status_code,
+                        'response': result
+                        }
+                
+                logger.info(f"[DebugAgentAPI] Request successful, response: {json.dumps(result, ensure_ascii=False)[:500]}...")
                 return {
                     'success': True,
                     'message': 'Debug successful',
                     'response': result,
                     'status_code': response.status_code
                 }
+        except httpx.HTTPStatusError as e:
+            # HTTP error with status code
+            error_msg = f'HTTP {e.response.status_code} error: {str(e)}'
+            try:
+                error_body = e.response.json() if e.response.headers.get('content-type', '').startswith('application/json') else e.response.text
+                logger.error(f"[DebugAgentAPI] {error_msg}")
+                logger.error(f"[DebugAgentAPI] Error response body: {json.dumps(error_body, ensure_ascii=False) if isinstance(error_body, dict) else error_body}")
+            except:
+                logger.error(f"[DebugAgentAPI] {error_msg}")
+                logger.error(f"[DebugAgentAPI] Error response text: {e.response.text[:500]}")
+            
+            return {
+                'success': False,
+                'message': error_msg,
+                'error': str(e),
+                'status_code': e.response.status_code,
+                'response': error_body if 'error_body' in locals() else None
+            }
         except httpx.HTTPError as e:
+            # Network or other HTTP errors
+            logger.error(f"[DebugAgentAPI] HTTP error: {str(e)}")
             return {
                 'success': False,
                 'message': f'HTTP error: {str(e)}',
                 'error': str(e)
             }
         except Exception as e:
+            logger.error(f"[DebugAgentAPI] Request failed: {str(e)}", exc_info=True)
             return {
                 'success': False,
                 'message': f'Request failed: {str(e)}',

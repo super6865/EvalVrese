@@ -5,6 +5,10 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.api.v1 import dataset, evaluator, evaluator_record, experiment, experiment_group, observability, model_config, model_set, prompt
+from app.utils.autogen_compat import patch_autogen_usage_extraction
+
+# Patch third-party libs early (before handling requests)
+patch_autogen_usage_extraction()
 
 app = FastAPI(
     title="EvalVerse API",
